@@ -1,0 +1,8 @@
+
+
+data/logs
+data/data_grille
+data/mcfunctions
+data/raw_point_cloud
+
+**.pyc

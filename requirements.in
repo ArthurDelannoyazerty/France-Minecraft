@@ -1,2 +1,6 @@
 numpy
 pyvista
+shapely
+geopandas
+wget
+laspy[lazrs,laszip]

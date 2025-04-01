@@ -137,7 +137,7 @@ if __name__=='__main__':
     # Parameters
     NUM_POINTS = 5000 # Can use a decent number with PyVista
     CUBE_SIDE = 10.0
-    VOXEL_SIDE = 0.5
+    VOXEL_SIDE = 1
     XY_STD_DEV = 1.8 # Adjust this to change clustering (smaller = tighter)
 
     # 1. Generate points with normal distribution on X/Y
