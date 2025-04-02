@@ -7,6 +7,7 @@ import json
 import numpy as np
 import pyvista as pv
 import geopandas as gpd
+import mcschematic
 
 from shapely.geometry import mapping
 from shapely.ops import unary_union
@@ -244,8 +245,7 @@ if __name__=='__main__':
     PERCENTAGE_TO_REMOVE = 40
     VOXEL_SIDE = 1
 
-    with open('data/mcfunctions/test.mcfunction', 'w') as f:
-        f.write('\n')
+    schem = mcschematic.MCSchematic()
     
     for point_class in points_classes_block.keys():
         logger.debug(f'Processing point class : {point_class}')
@@ -268,15 +268,12 @@ if __name__=='__main__':
         R = 30
         C = A[np.linalg.norm(A[:,:2] - B, axis=1) > R]
 
-        s = ''
-        LIMIT = 50000
+        LIMIT = 100
         i=0
         block = points_classes_block[point_class][0]
-        with open('data/mcfunctions/test.mcfunction', 'a') as f:
-            for coord in tqdm(C):
-                if i>LIMIT: break
-                i+= 1
-                # f.write(f'setblock {int(coord[0])} {int(coord[2])} {int(coord[1])} {block} replace\n')
-                f.write(f'setblock {int(coord[0])} {int(coord[2])} {int(coord[1])} {block}\n')
+        for coord in tqdm(C):
+            if i>LIMIT: break
+            i+= 1
+            schem.setBlock( (int(coord[0]), int(coord[2]), int(coord[1])), block)
     
-        
+    schem.save("data/myschems", "test_schematic", mcschematic.Version.JE_1_12_2)
