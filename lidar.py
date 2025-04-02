@@ -14,6 +14,7 @@ from shapely.vectorized import contains
 from pathlib import Path
 from utils.logger import setup_logging
 from script import find_occupied_voxels_vectorized
+from tqdm import tqdm
 
 
 logger = logging.getLogger(__name__)
@@ -199,39 +200,83 @@ if __name__=='__main__':
 
     tile_filepath = Path('data/raw_point_cloud/0')
     las = laspy.read(tile_filepath)
-    xyz = las.xyz
-    print(xyz.shape)
-
-    xyz = decimate_array(xyz, percentage_to_remove=40)
-
-    VOXEL_SIDE = 1
-    voxel_origins_opt = find_occupied_voxels_vectorized(xyz, voxel_size=VOXEL_SIDE)
-    voxel_origins_opt = voxel_origins_opt.astype(np.int32)
-
-    print('aaaaaaaaaaaaa')
-    print(voxel_origins_opt.shape)
-    voxel_origins_opt = np.unique(voxel_origins_opt, axis=0)
-    print(voxel_origins_opt.shape)
-    print('bbbbbbbbbbbbbbbbbb')
-
-    voxel_origins_opt_centered = voxel_origins_opt - voxel_origins_opt[0] 
-
-    A = voxel_origins_opt_centered
-    B = np.array([0,0])
-    R = 30
-    C = A[np.linalg.norm(A[:,:2] - B, axis=1) > R]
     
-    print(C.shape)
-    print(C)
 
-    from tqdm import tqdm
-    s = ''
-    LIMIT = 300000
-    i=0
+    points_classes_name = {
+        1 : "No Class",
+        2 : "Ground",
+        3 : "Small Vegetation (0-50cm)",
+        4 : "Medium Vegetation (50-150 cm)",
+        5 : "High Vegetation (+150 cm)",
+        6 : "Building",
+        9 : "Water",
+        17: "Bridge",
+        64: "Perennial Soil",
+        66: "Virtual Points",
+        67: "Miscellaneous"
+    }
+    # points_classes_block = {
+    #     1 : ["minecraft:black_wool"],
+    #     2 : ["minecraft:brown_wool"],
+    #     3 : ["minecraft:lime_wool"],
+    #     4 : ["minecraft:green_wool"],
+    #     5 : ["minecraft:cyan_wool"],
+    #     6 : ["minecraft:gray_wool"],
+    #     9 : ["minecraft:blue_wool"],
+    #     17: ["minecraft:purple_wool"],
+    #     64: ["minecraft:yellow_wool"],
+    #     66: ["minecraft:pink_wool"],
+    #     67: ["minecraft:magenta_wool"],
+    # }
+    points_classes_block = {
+        1 : ["minecraft:wool 15"],
+        2 : ["minecraft:wool 12"],
+        3 : ["minecraft:wool 5"],
+        4 : ["minecraft:wool 13"],
+        5 : ["minecraft:wool 9"],
+        6 : ["minecraft:wool 7"],
+        9 : ["minecraft:wool 11"],
+        17: ["minecraft:wool 10"],
+        64: ["minecraft:wool 4"],
+        66: ["minecraft:wool 6"],
+        67: ["minecraft:wool 2"],
+    }
+    PERCENTAGE_TO_REMOVE = 40
+    VOXEL_SIDE = 1
+
     with open('data/mcfunctions/test.mcfunction', 'w') as f:
-        for coord in tqdm(C):
-            if i>LIMIT: break
-            i+= 1
-            f.write(f'setblock {int(coord[0])} {int(coord[2])} {int(coord[1])} minecraft:stone\n')
+        f.write('\n')
+    
+    for point_class in points_classes_block.keys():
+        logger.debug(f'Processing point class : {point_class}')
+
+        x = las.points[las.classification == point_class].x.array
+        y = las.points[las.classification == point_class].y.array
+        z = las.points[las.classification == point_class].z.array
+        xyz = np.vstack([x,y,z]).T / 100
+        logger.debug(xyz.shape)
+
+        if len(xyz)==0: continue
+
+        xyz = decimate_array(xyz, PERCENTAGE_TO_REMOVE)
+
+        voxel_origins_opt = find_occupied_voxels_vectorized(xyz, voxel_size=VOXEL_SIDE)
+        # voxel_origins_opt_centered = voxel_origins_opt - voxel_origins_opt[0] 
+
+        A = voxel_origins_opt
+        B = np.array([0,0])
+        R = 30
+        C = A[np.linalg.norm(A[:,:2] - B, axis=1) > R]
+
+        s = ''
+        LIMIT = 50000
+        i=0
+        block = points_classes_block[point_class][0]
+        with open('data/mcfunctions/test.mcfunction', 'a') as f:
+            for coord in tqdm(C):
+                if i>LIMIT: break
+                i+= 1
+                # f.write(f'setblock {int(coord[0])} {int(coord[2])} {int(coord[1])} {block} replace\n')
+                f.write(f'setblock {int(coord[0])} {int(coord[2])} {int(coord[1])} {block}\n')
     
         

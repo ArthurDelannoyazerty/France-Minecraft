@@ -54,7 +54,7 @@ def create_normal_xy_points(num_points=30,
 
 # --- Voxel Finding (Keep the optimized version) ---
 
-def find_occupied_voxels_vectorized(points_array, voxel_size=0.5):
+def find_occupied_voxels_vectorized(points_array:np.ndarray, voxel_size:float=0.5):
     """
     Efficiently identifies unique voxel origins containing points using vectorized operations.
     """
@@ -66,6 +66,7 @@ def find_occupied_voxels_vectorized(points_array, voxel_size=0.5):
 
     voxel_indices = np.floor(points_array_clamped / voxel_size)
     voxel_origins_all = voxel_indices * voxel_size
+    voxel_origins_all = voxel_origins_all.astype(np.int32)
     unique_origins = np.unique(voxel_origins_all, axis=0)
     return unique_origins
 
