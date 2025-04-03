@@ -216,20 +216,33 @@ if __name__=='__main__':
         66: "Virtual Points",
         67: "Miscellaneous"
     }
-    # points_classes_block = {
-    #     1 : ["minecraft:black_wool"],
-    #     2 : ["minecraft:brown_wool"],
-    #     3 : ["minecraft:lime_wool"],
-    #     4 : ["minecraft:green_wool"],
-    #     5 : ["minecraft:cyan_wool"],
-    #     6 : ["minecraft:gray_wool"],
-    #     9 : ["minecraft:blue_wool"],
-    #     17: ["minecraft:purple_wool"],
-    #     64: ["minecraft:yellow_wool"],
-    #     66: ["minecraft:pink_wool"],
-    #     67: ["minecraft:magenta_wool"],
-    # }
-    points_classes_block = {
+    template_points_classes_full_stone = {
+        1 : ["minecraft:stone"],
+        2 : ["minecraft:stone"],
+        3 : ["minecraft:stone"],
+        4 : ["minecraft:stone"],
+        5 : ["minecraft:stone"],
+        6 : ["minecraft:stone"],
+        9 : ["minecraft:stone"],
+        17: ["minecraft:stone"],
+        64: ["minecraft:stone"],
+        66: ["minecraft:stone"],
+        67: ["minecraft:stone"],
+    }
+    template_points_classes_wool = {
+        1 : ["minecraft:black_wool"],
+        2 : ["minecraft:brown_wool"],
+        3 : ["minecraft:lime_wool"],
+        4 : ["minecraft:green_wool"],
+        5 : ["minecraft:cyan_wool"],
+        6 : ["minecraft:gray_wool"],
+        9 : ["minecraft:blue_wool"],
+        17: ["minecraft:purple_wool"],
+        64: ["minecraft:yellow_wool"],
+        66: ["minecraft:pink_wool"],
+        67: ["minecraft:magenta_wool"],
+    }
+    template_points_classes_wool_old = {
         1 : ["minecraft:wool 15"],
         2 : ["minecraft:wool 12"],
         3 : ["minecraft:wool 5"],
@@ -242,12 +255,13 @@ if __name__=='__main__':
         66: ["minecraft:wool 6"],
         67: ["minecraft:wool 2"],
     }
+
+    choosen_template_point_classes = template_points_classes_full_stone
+    
+    schem = mcschematic.MCSchematic()
     PERCENTAGE_TO_REMOVE = 40
     VOXEL_SIDE = 1
-
-    schem = mcschematic.MCSchematic()
-    
-    for point_class in points_classes_block.keys():
+    for point_class in choosen_template_point_classes.keys():
         logger.debug(f'Processing point class : {point_class}')
 
         x = las.points[las.classification == point_class].x.array
@@ -270,7 +284,7 @@ if __name__=='__main__':
 
         LIMIT = 100
         i=0
-        block = points_classes_block[point_class][0]
+        block = choosen_template_point_classes[point_class][0]
         for coord in tqdm(C):
             if i>LIMIT: break
             i+= 1
