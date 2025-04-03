@@ -199,7 +199,7 @@ if __name__=='__main__':
     laz_folderpath = Path('data/raw_point_cloud')
     # download_available_tile(filepath_all_tiles_geojson, laz_folderpath)
 
-    tile_filepath = Path('data/raw_point_cloud/0')
+    tile_filepath = Path('data/raw_point_cloud/LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz')
     las = laspy.read(tile_filepath)
     
 
@@ -230,17 +230,17 @@ if __name__=='__main__':
         67: ["minecraft:stone"],
     }
     template_points_classes_wool = {
-        1 : ["minecraft:black_wool"],
+        # 1 : ["minecraft:black_wool"],
         2 : ["minecraft:brown_wool"],
         3 : ["minecraft:lime_wool"],
         4 : ["minecraft:green_wool"],
         5 : ["minecraft:cyan_wool"],
         6 : ["minecraft:gray_wool"],
         9 : ["minecraft:blue_wool"],
-        17: ["minecraft:purple_wool"],
-        64: ["minecraft:yellow_wool"],
-        66: ["minecraft:pink_wool"],
-        67: ["minecraft:magenta_wool"],
+        # 17: ["minecraft:purple_wool"],
+        # 64: ["minecraft:yellow_wool"],
+        # 66: ["minecraft:pink_wool"],
+        # 67: ["minecraft:magenta_wool"],
     }
     template_points_classes_wool_old = {
         1 : ["minecraft:wool 15"],
@@ -256,21 +256,29 @@ if __name__=='__main__':
         67: ["minecraft:wool 2"],
     }
 
-    choosen_template_point_classes = template_points_classes_full_stone
+    choosen_template_point_classes = template_points_classes_wool
     
+    LOWEST_MINECRAFT_POINT = -60
+    HIGHEST_MINECRAFT_POINT = 319
+    lowest_coordinate  = las.xyz[:,2].min()
+    highest_coordinate = las.xyz[:,2].max()
+
+    z_axis_translate = LOWEST_MINECRAFT_POINT - lowest_coordinate
+
+
     schem = mcschematic.MCSchematic()
     PERCENTAGE_TO_REMOVE = 40
     VOXEL_SIDE = 1
     for point_class in choosen_template_point_classes.keys():
-        logger.debug(f'Processing point class : {point_class}')
+        print(f'Processing point class : {point_class}')
 
-        x = las.points[las.classification == point_class].x.array
-        y = las.points[las.classification == point_class].y.array
-        z = las.points[las.classification == point_class].z.array
-        xyz = np.vstack([x,y,z]).T / 100
-        logger.debug(xyz.shape)
+        x = las.points[las.classification == point_class].x.array / 100
+        y = las.points[las.classification == point_class].y.array / 100
+        z = las.points[las.classification == point_class].z.array / 100 + z_axis_translate
+        xyz = np.vstack([x,y,z]).T
 
         if len(xyz)==0: continue
+        print(f'Point : {xyz[0]}')
 
         xyz = decimate_array(xyz, PERCENTAGE_TO_REMOVE)
 
@@ -290,4 +298,4 @@ if __name__=='__main__':
             i+= 1
             schem.setBlock( (int(coord[0]), int(coord[2]), int(coord[1])), block)
     
-    schem.save("data/myschems", "test_schematic", mcschematic.Version.JE_1_12_2)
+    schem.save("data/myschems", "test_schematic", mcschematic.Version.JE_1_21_1)
