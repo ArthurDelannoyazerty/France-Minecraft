@@ -266,36 +266,49 @@ if __name__=='__main__':
     z_axis_translate = LOWEST_MINECRAFT_POINT - lowest_coordinate
 
 
-    schem = mcschematic.MCSchematic()
     PERCENTAGE_TO_REMOVE = 40
     VOXEL_SIDE = 1
-    for point_class in choosen_template_point_classes.keys():
-        print(f'Processing point class : {point_class}')
+    BATCH_PER_PRODUCT_SIDE = 4
 
-        x = las.points[las.classification == point_class].x.array / 100
-        y = las.points[las.classification == point_class].y.array / 100
-        z = las.points[las.classification == point_class].z.array / 100 + z_axis_translate
-        xyz = np.vstack([x,y,z]).T
+    las_x_length = las.x.max() - las.x.min()
+    las_y_length = las.y.max() - las.y.min()
 
-        if len(xyz)==0: continue
-        print(f'Point : {xyz[0]}')
-
-        xyz = decimate_array(xyz, PERCENTAGE_TO_REMOVE)
-
-        voxel_origins_opt = find_occupied_voxels_vectorized(xyz, voxel_size=VOXEL_SIDE)
-        # voxel_origins_opt_centered = voxel_origins_opt - voxel_origins_opt[0] 
-
-        A = voxel_origins_opt
-        B = np.array([0,0])
-        R = 30
-        C = A[np.linalg.norm(A[:,:2] - B, axis=1) > R]
-
-        LIMIT = 100
-        i=0
-        block = choosen_template_point_classes[point_class][0]
-        for coord in tqdm(C):
-            if i>LIMIT: break
-            i+= 1
-            schem.setBlock( (int(coord[0]), int(coord[2]), int(coord[1])), block)
+    for batch in range(BATCH_PER_PRODUCT_SIDE):
+        x_start = las.x.min() +   batch    * (las_x_length/BATCH_PER_PRODUCT_SIDE)
+        x_end   = las.x.min() +  (batch+1) * (las_x_length/BATCH_PER_PRODUCT_SIDE)
+        y_start = las.y.min() +   batch    * (las_y_length/BATCH_PER_PRODUCT_SIDE)
+        y_end   = las.y.min() +  (batch+1) * (las_y_length/BATCH_PER_PRODUCT_SIDE)
     
-    schem.save("data/myschems", "test_schematic", mcschematic.Version.JE_1_21_1)
+        batch_las = las[(las.x<=x_end) & (las.x>=x_start) & (las.y<=y_end) & (las.y>=y_start)]
+
+        schem = mcschematic.MCSchematic()
+        for point_class in choosen_template_point_classes.keys():
+            print(f'Processing point class : {point_class}')
+
+            x = las.points[las.classification == point_class].x.array / 100
+            y = las.points[las.classification == point_class].y.array / 100
+            z = las.points[las.classification == point_class].z.array / 100 + z_axis_translate
+            xyz = np.vstack([x,y,z]).T
+
+            if len(xyz)==0: continue
+            print(f'Point : {xyz[0]}')
+
+            xyz = decimate_array(xyz, PERCENTAGE_TO_REMOVE)
+
+            voxel_origins_opt = find_occupied_voxels_vectorized(xyz, voxel_size=VOXEL_SIDE)
+            # voxel_origins_opt_centered = voxel_origins_opt - voxel_origins_opt[0] 
+
+            A = voxel_origins_opt
+            B = np.array([0,0])
+            R = 30
+            C = A[np.linalg.norm(A[:,:2] - B, axis=1) > R]
+
+            LIMIT = 100
+            i=0
+            block = choosen_template_point_classes[point_class][0]
+            for coord in tqdm(C):
+                if i>LIMIT: break
+                i+= 1
+                schem.setBlock( (int(coord[0]), int(coord[2]), int(coord[1])), block)
+    
+        schem.save(f"data/myschems", f"test_schematic{batch}", mcschematic.Version.JE_1_21_1)
