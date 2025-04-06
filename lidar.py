@@ -7,6 +7,7 @@ import json
 import numpy as np
 import pyvista as pv
 import geopandas as gpd
+import mcschematic
 
 from shapely.geometry import mapping
 from shapely.ops import unary_union
@@ -109,6 +110,8 @@ def decimate_array(array:np.ndarray, percentage_to_remove):
     if not 0 <= percentage_to_remove <= 100:
         raise ValueError("Percentage must be between 0 and 100.")
     
+    if percentage_to_remove==0: return array
+
     mask = np.random.rand(array.shape[0]) > (percentage_to_remove / 100.0)
     decimated_array = array[mask]
 
@@ -164,6 +167,7 @@ def filter_points_by_polygon(xyz, polygon):
     logger.info(f'Points filtered. {xyz.shape[0]} --> {filtered_points.shape[0]} (Keeping {filtered_points.shape[0]/xyz.shape[0]} %)')
     return filtered_points
 
+
 def download_available_tile(geojson_all_tiles_available_filepath:Path, laz_folderpath:Path):
     
     logger.info('Loading geojson of all tiles available')
@@ -198,10 +202,10 @@ if __name__=='__main__':
     laz_folderpath = Path('data/raw_point_cloud')
     # download_available_tile(filepath_all_tiles_geojson, laz_folderpath)
 
-    tile_filepath = Path('data/raw_point_cloud/0')
+    tile_filepath = Path('data/raw_point_cloud/LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz')
     las = laspy.read(tile_filepath)
     
-
+    order_bloc_creation = [66, 64, 17, 9, 5, 4, 3, 67, 1, 2, 6]
     points_classes_name = {
         1 : "No Class",
         2 : "Ground",
@@ -215,20 +219,33 @@ if __name__=='__main__':
         66: "Virtual Points",
         67: "Miscellaneous"
     }
-    # points_classes_block = {
-    #     1 : ["minecraft:black_wool"],
-    #     2 : ["minecraft:brown_wool"],
-    #     3 : ["minecraft:lime_wool"],
-    #     4 : ["minecraft:green_wool"],
-    #     5 : ["minecraft:cyan_wool"],
-    #     6 : ["minecraft:gray_wool"],
-    #     9 : ["minecraft:blue_wool"],
-    #     17: ["minecraft:purple_wool"],
-    #     64: ["minecraft:yellow_wool"],
-    #     66: ["minecraft:pink_wool"],
-    #     67: ["minecraft:magenta_wool"],
-    # }
-    points_classes_block = {
+    template_points_classes_full_stone = {
+        1 : ["minecraft:stone"],
+        2 : ["minecraft:stone"],
+        3 : ["minecraft:stone"],
+        4 : ["minecraft:stone"],
+        5 : ["minecraft:stone"],
+        6 : ["minecraft:stone"],
+        9 : ["minecraft:stone"],
+        17: ["minecraft:stone"],
+        64: ["minecraft:stone"],
+        66: ["minecraft:stone"],
+        67: ["minecraft:stone"],
+    }
+    template_points_classes_wool = {
+        1 : ["minecraft:black_wool"],
+        2 : ["minecraft:brown_wool"],
+        3 : ["minecraft:lime_wool"],
+        4 : ["minecraft:green_wool"],
+        5 : ["minecraft:cyan_wool"],
+        6 : ["minecraft:gray_wool"],
+        9 : ["minecraft:blue_wool"],
+        17: ["minecraft:purple_wool"],
+        64: ["minecraft:yellow_wool"],
+        66: ["minecraft:pink_wool"],
+        67: ["minecraft:magenta_wool"],
+    }
+    template_points_classes_wool_old = {
         1 : ["minecraft:wool 15"],
         2 : ["minecraft:wool 12"],
         3 : ["minecraft:wool 5"],
@@ -241,42 +258,69 @@ if __name__=='__main__':
         66: ["minecraft:wool 6"],
         67: ["minecraft:wool 2"],
     }
-    PERCENTAGE_TO_REMOVE = 40
+
+    choosen_template_point_classes = template_points_classes_wool
+    
+    LOWEST_MINECRAFT_POINT = -60
+    HIGHEST_MINECRAFT_POINT = 319
+    lowest_coordinate  = las.xyz[:,2].min()
+    highest_coordinate = las.xyz[:,2].max()
+
+    z_axis_translate = LOWEST_MINECRAFT_POINT - lowest_coordinate
+
+
+    PERCENTAGE_TO_REMOVE = 0
     VOXEL_SIDE = 1
+    BATCH_PER_PRODUCT_SIDE = 5
 
-    with open('data/mcfunctions/test.mcfunction', 'w') as f:
-        f.write('\n')
+
+    las_name = 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69'
+    folder_save_myschem = Path(f"data/myschems/") / las_name
+    folder_save_myschem.mkdir(parents=True, exist_ok=True)
+
+    las_length = las.x.max() - las.x.min()  # same for x and y
+    batch_length = las_length/BATCH_PER_PRODUCT_SIDE
+    batch_limit_list = [
+        (
+            las.x.min() +      j  * batch_length,           # xmin
+            las.y.min() +      i  * batch_length,           # ymin
+            las.x.min() + (1 + j) * batch_length,           # xmax
+            las.y.min() + (1 + i) * batch_length            # ymax
+        )
+        for i in range(BATCH_PER_PRODUCT_SIDE)
+        for j in range(BATCH_PER_PRODUCT_SIDE)
+    ]
+
+    text_mcfunction = 'gamemode spectator\n'
+    for index_batch, (xmin, ymin, xmax, ymax) in enumerate(batch_limit_list):
+        batch_las = las[(las.x<=xmax) & (las.x>=xmin) & (las.y<=ymax) & (las.y>=ymin)]
+        text_mcfunction += f'tp {int(xmin)} 0 {int(ymin)}\n'
+
+        schem = mcschematic.MCSchematic()
+        for point_class in order_bloc_creation:
+            print(f'Processing point class : {point_class}')
+
+            x = batch_las.points[batch_las.classification == point_class].x.array / 100
+            y = batch_las.points[batch_las.classification == point_class].y.array / 100
+            z = batch_las.points[batch_las.classification == point_class].z.array / 100 + z_axis_translate
+            xyz = np.vstack([x,y,z]).T
+
+            if len(xyz)==0: continue
+
+            xyz = decimate_array(xyz, PERCENTAGE_TO_REMOVE)
+
+            voxel_origins_opt = find_occupied_voxels_vectorized(xyz, voxel_size=VOXEL_SIDE)
+            voxel_origins_opt = voxel_origins_opt - [xmin, ymin, 0]
+
+            block = choosen_template_point_classes[point_class][0]
+            for coord in tqdm(voxel_origins_opt):
+                schem.setBlock( (int(coord[0]), int(coord[2]), int(coord[1])), block)
+
+        schematic_filename = f"n_{index_batch+1}_of_{BATCH_PER_PRODUCT_SIDE**2}~x_{int(xmin)}~y_{int(ymin)}"
+        schem.save(str(folder_save_myschem), schematic_filename, mcschematic.Version.JE_1_21_1)
+        text_mcfunction += f'schematic load /{las_name}/{schematic_filename}.schem\n'
+        text_mcfunction += '/paste\n'
+    text_mcfunction += 'gamemode creative'
     
-    for point_class in points_classes_block.keys():
-        logger.debug(f'Processing point class : {point_class}')
-
-        x = las.points[las.classification == point_class].x.array
-        y = las.points[las.classification == point_class].y.array
-        z = las.points[las.classification == point_class].z.array
-        xyz = np.vstack([x,y,z]).T / 100
-        logger.debug(xyz.shape)
-
-        if len(xyz)==0: continue
-
-        xyz = decimate_array(xyz, PERCENTAGE_TO_REMOVE)
-
-        voxel_origins_opt = find_occupied_voxels_vectorized(xyz, voxel_size=VOXEL_SIDE)
-        # voxel_origins_opt_centered = voxel_origins_opt - voxel_origins_opt[0] 
-
-        A = voxel_origins_opt
-        B = np.array([0,0])
-        R = 30
-        C = A[np.linalg.norm(A[:,:2] - B, axis=1) > R]
-
-        s = ''
-        LIMIT = 50000
-        i=0
-        block = points_classes_block[point_class][0]
-        with open('data/mcfunctions/test.mcfunction', 'a') as f:
-            for coord in tqdm(C):
-                if i>LIMIT: break
-                i+= 1
-                # f.write(f'setblock {int(coord[0])} {int(coord[2])} {int(coord[1])} {block} replace\n')
-                f.write(f'setblock {int(coord[0])} {int(coord[2])} {int(coord[1])} {block}\n')
-    
-        
+    mcfunction_filepath = Path('data/mcfunctions') / (las_name + '.mcfunction')
+    with open(mcfunction_filepath, 'w') as f: f.write(text_mcfunction)

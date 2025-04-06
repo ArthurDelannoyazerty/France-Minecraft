@@ -4,5 +4,7 @@ data/logs
 data/data_grille
 data/mcfunctions
 data/raw_point_cloud
+data/myschems
+data/litemapy
 
 **.pyc
