@@ -54,21 +54,21 @@ def create_normal_xy_points(num_points=30,
 
 # --- Voxel Finding (Keep the optimized version) ---
 
-def find_occupied_voxels_vectorized(points_array:np.ndarray, voxel_size:float=0.5):
+def find_occupied_voxels_vectorized(points_array:np.ndarray, 
+                                    voxel_size:float=0.5,
+                                    min_points_per_voxel:int=3):
     """
     Efficiently identifies unique voxel origins containing points using vectorized operations.
     """
     if points_array.size == 0:
         return np.empty((0, 3))
-    # Ensure points are within calculation range if they weren't clipped
-    # This prevents issues with floor division if points fall slightly below 0
-    points_array_clamped = np.maximum(points_array, 0)
 
-    voxel_indices = np.floor(points_array_clamped / voxel_size)
-    voxel_origins_all = voxel_indices * voxel_size
-    voxel_origins_all = voxel_origins_all.astype(np.int32)
-    unique_origins = np.unique(voxel_origins_all, axis=0)
-    return unique_origins
+    voxel_indices = np.floor(points_array / voxel_size).astype(np.int32)
+    unique_indices, counts = np.unique(voxel_indices, axis=0, return_counts=True)
+    threshold_mask = counts >= min_points_per_voxel
+    filtered_indices = unique_indices[threshold_mask]
+    filtered_origins = filtered_indices * voxel_size
+    return filtered_origins
 
 
 # --- PyVista Plotting Function (Keep the efficient version) ---
@@ -138,7 +138,7 @@ if __name__=='__main__':
     # Parameters
     NUM_POINTS = 5000 # Can use a decent number with PyVista
     CUBE_SIDE = 10.0
-    VOXEL_SIDE = 1
+    VOXEL_SIDE = 0.5
     XY_STD_DEV = 1.8 # Adjust this to change clustering (smaller = tighter)
 
     # 1. Generate points with normal distribution on X/Y

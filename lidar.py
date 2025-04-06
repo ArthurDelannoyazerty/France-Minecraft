@@ -204,7 +204,7 @@ if __name__=='__main__':
 
     tile_filepath = Path('data/raw_point_cloud/LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz')
     las = laspy.read(tile_filepath)
-    
+
     order_bloc_creation = [66, 64, 17, 9, 5, 4, 3, 67, 1, 2, 6]
     points_classes_name = {
         1 : "No Class",
@@ -258,8 +258,21 @@ if __name__=='__main__':
         66: ["minecraft:wool 6"],
         67: ["minecraft:wool 2"],
     }
+    template_points_classes_natural = {
+        1 : ["minecraft:stone"],
+        2 : ["minecraft:grass_block"],
+        3 : ["minecraft:short_grass"],
+        4 : ["minecraft:moss_block"],
+        5 : ["minecraft:oak_leaves"],
+        6 : ["minecraft:stone_bricks"],
+        9 : ["minecraft:blue_stained_glass"],
+        17: ["minecraft:polished_blackstone"],
+        64: ["minecraft:dirt_path"],
+        66: ["minecraft:diorite"],
+        67: ["minecraft:basalt"],
+    }
 
-    choosen_template_point_classes = template_points_classes_wool
+    choosen_template_point_classes = template_points_classes_natural
     
     LOWEST_MINECRAFT_POINT = -60
     HIGHEST_MINECRAFT_POINT = 319
@@ -271,6 +284,7 @@ if __name__=='__main__':
 
     PERCENTAGE_TO_REMOVE = 0
     VOXEL_SIDE = 1
+    MIN_POINTS_PER_VOXEL = 3
     BATCH_PER_PRODUCT_SIDE = 5
 
 
@@ -294,29 +308,30 @@ if __name__=='__main__':
     text_mcfunction = 'gamemode spectator\n'
     for index_batch, (xmin, ymin, xmax, ymax) in enumerate(batch_limit_list):
         batch_las = las[(las.x<=xmax) & (las.x>=xmin) & (las.y<=ymax) & (las.y>=ymin)]
-        text_mcfunction += f'tp {int(xmin)} 0 {int(ymin)}\n'
+        text_mcfunction += f'tp {int(xmin)} 0 {int(-ymin)}\n'          # flipped coordinates because we will flip all the points
 
         schem = mcschematic.MCSchematic()
         for point_class in order_bloc_creation:
             print(f'Processing point class : {point_class}')
 
-            x = batch_las.points[batch_las.classification == point_class].x.array / 100
-            y = batch_las.points[batch_las.classification == point_class].y.array / 100
-            z = batch_las.points[batch_las.classification == point_class].z.array / 100 + z_axis_translate
+            # Select the points in the zone and from the good class and scale them to meters and reverse the coordinates (because Lambert93 is inverted)
+            x = (batch_las.points[batch_las.classification == point_class].x.array / 100)
+            y = (batch_las.points[batch_las.classification == point_class].y.array / 100 * -1)
+            z = (batch_las.points[batch_las.classification == point_class].z.array / 100) + z_axis_translate
             xyz = np.vstack([x,y,z]).T
 
             if len(xyz)==0: continue
 
             xyz = decimate_array(xyz, PERCENTAGE_TO_REMOVE)
 
-            voxel_origins_opt = find_occupied_voxels_vectorized(xyz, voxel_size=VOXEL_SIDE)
-            voxel_origins_opt = voxel_origins_opt - [xmin, ymin, 0]
+            voxel_origins_opt = find_occupied_voxels_vectorized(xyz, voxel_size=VOXEL_SIDE, min_points_per_voxel=MIN_POINTS_PER_VOXEL)
+            voxel_origins_opt = voxel_origins_opt - [xmin, -ymin, 0]
 
             block = choosen_template_point_classes[point_class][0]
             for coord in tqdm(voxel_origins_opt):
-                schem.setBlock( (int(coord[0]), int(coord[2]), int(coord[1])), block)
+                schem.setBlock( (int(coord[0]), int(coord[2]), int(coord[1])), block)           # minecraft coordinates are (X,Z,Y) and not (X,Y,Z)
 
-        schematic_filename = f"n_{index_batch+1}_of_{BATCH_PER_PRODUCT_SIDE**2}~x_{int(xmin)}~y_{int(ymin)}"
+        schematic_filename = f"n_{index_batch+1}_of_{BATCH_PER_PRODUCT_SIDE**2}~x_{int(xmin)}~y_{int(-ymin)}"
         schem.save(str(folder_save_myschem), schematic_filename, mcschematic.Version.JE_1_21_1)
         text_mcfunction += f'schematic load /{las_name}/{schematic_filename}.schem\n'
         text_mcfunction += '/paste\n'
