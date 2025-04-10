@@ -9,7 +9,7 @@ import pyvista as pv
 import geopandas as gpd
 import mcschematic
 
-from scipy.spatial import KDTree
+from scipy.interpolate import LinearNDInterpolator
 # NEW: Import warnings to suppress potential division-by-zero in IDW if needed
 import warnings
 
@@ -232,117 +232,87 @@ def download_available_tile(geojson_all_tiles_available_filepath:Path, laz_folde
 
 
 
-# --- NEW FUNCTION ---
-def fill_ground_holes_idw(ground_points_xyz: np.ndarray,
-                          grid_resolution: float = 1.0,
-                          search_radius_factor: float = 2.5,
-                          k_neighbors: int = 8,
-                          idw_power: int = 2) -> np.ndarray:
+
+def process_point_cloud(points, cell_size=0.5):
     """
-    Fills holes in ground point cloud using Inverse Distance Weighting (IDW).
-
-    Args:
-        ground_points_xyz: (N, 3) array of ground points [x, y, z].
-        grid_resolution: The size of the 2D grid cells to check for holes (in meters).
-        search_radius_factor: Max search radius for neighbors = factor * grid_resolution.
-        k_neighbors: Minimum number of neighbors to use for IDW.
-        idw_power: Power parameter for IDW (usually 1 or 2).
-
+    Processes a 3D point cloud by:
+      1. Creating a 2D grid that covers the full XY extent of the point cloud.
+      2. Flattening the point cloud onto that grid and flagging the empty cells.
+      3. For each empty cell, adding 4 new points located at evenly-spaced positions inside the cell.
+         Their z-values are obtained via a linear interpolation using the original points.
+    
+    Parameters:
+      points (np.ndarray): Nx3 numpy array of points (x, y, z).
+      cell_size (float): grid cell size (default 0.5 meters).
+    
     Returns:
-        (M, 3) array containing original points + interpolated points for holes.
+      np.ndarray: The augmented array of points (original + the new points).
     """
-    if ground_points_xyz.shape[0] < k_neighbors:
-        logger.warning(f"Not enough ground points ({ground_points_xyz.shape[0]}) for interpolation (need {k_neighbors}). Returning original points.")
-        return ground_points_xyz
+    # display_point_cloud(points)
 
-    logger.info(f"Starting ground hole filling. Input points: {ground_points_xyz.shape[0]}, Grid: {grid_resolution}m")
+    # Determine grid bounds (using the points' x-y projection)
+    x_min, y_min = np.min(points[:, :2], axis=0)
+    x_max, y_max = np.max(points[:, :2], axis=0)
+    
+    # Determine the number of cells required in each dimension (ceiling)
+    n_cells_x = int(np.floor((x_max - x_min) / cell_size))
+    n_cells_y = int(np.floor((y_max - y_min) / cell_size))
+    
+    # Create an occupancy grid that marks cells with any point present.
+    # Compute cell indices (i for x, j for y) for each point.
+    ix = ((points[:, 0] - x_min) / cell_size).astype(np.int32)
+    iy = ((points[:, 1] - y_min) / cell_size).astype(np.int32)
 
-    # 1. Create KDTree for efficient neighbor search on original points
-    tree = KDTree(ground_points_xyz[:, :2]) # Use only X, Y for neighbor search
+    # remove the points on the edge of the grid by replacing them by the last cell
+    ix[np.argwhere(ix==n_cells_x)] = n_cells_x - 1
+    iy[np.argwhere(iy==n_cells_y)] = n_cells_y - 1
+    
+    # Initialize a boolean grid of False (empty)
+    occupancy = np.zeros((n_cells_x, n_cells_y), dtype=bool)
+    occupancy[ix, iy] = True  # mark cells that contain at least one point
+    
+    # Identify indices (i,j) of the empty cells
+    empty_cells = np.argwhere(~occupancy)  # each row: [i, j]
+    
+    # Prepare the 4 sample offsets within a cell.
+    # Here we choose 4 positions placed evenly inside the cell.
+    # They are offset by 1/4 and 3/4 of the cell size from the lower left corner.
+    offsets = np.array([[0.25, 0.25],
+                        [0.75, 0.25],
+                        [0.25, 0.75],
+                        [0.75, 0.75]]) * cell_size
+    
+    # Compute the lower left coordinate for each empty cell.
+    empty_cell_origin = np.empty((empty_cells.shape[0], 2))
+    empty_cell_origin[:, 0] = x_min + empty_cells[:, 0] * cell_size
+    empty_cell_origin[:, 1] = y_min + empty_cells[:, 1] * cell_size
+    
+    # For each empty cell, compute the coordinates for the 4 new sample points.
+    # We use broadcasting to add the offsets to each cell's origin.
+    new_xy = (empty_cell_origin[:, None, :] + offsets[None, :, :]).reshape(-1, 2)
+    
+    # Create a linear interpolator for the z values from the original points using their XY positions.
+    interp_lin = LinearNDInterpolator(points[:, :2], points[:, 2])
+    new_z = interp_lin(new_xy)
+    
+    # (Optional) In case some points fall outside the convex hull and are NaN, one may fill them using nearest neighbor:
+    nan_mask = np.isnan(new_z)
+    if np.any(nan_mask):
+        from scipy.interpolate import NearestNDInterpolator
+        interp_nearest = NearestNDInterpolator(points[:, :2], points[:, 2])
+        new_z[nan_mask] = interp_nearest(new_xy[nan_mask])
+    
+    # Combine the new XY and Z coordinates.
+    new_points = np.hstack([new_xy, new_z[:, None]])
+    # display_point_cloud(new_points)
+    
+    # Merge the original points with the newly generated points.
+    all_points = np.vstack([points, new_points])
+    # display_point_cloud(all_points)
+    return all_points
 
-    # 2. Define the 2D grid based on point bounds
-    min_x, min_y, _ = ground_points_xyz.min(axis=0)
-    max_x, max_y, _ = ground_points_xyz.max(axis=0)
-
-    # Align grid to coordinates for consistency
-    grid_min_x = np.floor(min_x / grid_resolution) * grid_resolution
-    grid_min_y = np.floor(min_y / grid_resolution) * grid_resolution
-    grid_max_x = np.ceil(max_x / grid_resolution) * grid_resolution
-    grid_max_y = np.ceil(max_y / grid_resolution) * grid_resolution
-
-    # Get grid indices for all original points
-    original_indices_x = np.floor((ground_points_xyz[:, 0] - grid_min_x) / grid_resolution).astype(int)
-    original_indices_y = np.floor((ground_points_xyz[:, 1] - grid_min_y) / grid_resolution).astype(int)
-    occupied_cell_indices = set(zip(original_indices_x, original_indices_y))
-
-    # 3. Identify potential hole cells (all cells within the bounds)
-    n_cells_x = int(round((grid_max_x - grid_min_x) / grid_resolution))
-    n_cells_y = int(round((grid_max_y - grid_min_y) / grid_resolution))
-
-    potential_hole_centers_xy = []
-    empty_cell_indices = set()
-
-    for ix in range(n_cells_x):
-        for iy in range(n_cells_y):
-            if (ix, iy) not in occupied_cell_indices:
-                # Calculate center of this empty cell
-                cell_center_x = grid_min_x + (ix + 0.5) * grid_resolution
-                cell_center_y = grid_min_y + (iy + 0.5) * grid_resolution
-                potential_hole_centers_xy.append([cell_center_x, cell_center_y])
-                empty_cell_indices.add((ix,iy)) # Keep track of empty indices
 
 
-    if not potential_hole_centers_xy:
-        logger.info("No empty grid cells found within the bounding box.")
-        return ground_points_xyz
-
-    potential_hole_centers_xy = np.array(potential_hole_centers_xy)
-    logger.info(f"Found {len(potential_hole_centers_xy)} potential empty cells.")
-
-    # 4. Interpolate Z for empty cells using IDW
-    interpolated_points = []
-    search_radius = grid_resolution * search_radius_factor
-
-    # Query the KDTree for neighbors of *all* potential hole centers at once
-    distances, indices = tree.query(potential_hole_centers_xy, k=k_neighbors, distance_upper_bound=search_radius)
-
-    num_interpolated = 0
-    for i, center_xy in enumerate(tqdm(potential_hole_centers_xy, desc="Interpolating hole Z", leave=False)):
-        neighbor_indices = indices[i]
-        neighbor_distances = distances[i]
-
-        # Filter out invalid results (indices out of range, infinite distances)
-        valid_mask = (neighbor_indices < ground_points_xyz.shape[0]) & np.isfinite(neighbor_distances)
-        valid_indices = neighbor_indices[valid_mask]
-        valid_distances = neighbor_distances[valid_mask]
-
-        if len(valid_indices) < 1 : # Need at least 1 neighbor to interpolate
-             # logger.debug(f"Skipping cell {center_xy}: Not enough valid neighbors within radius {search_radius}")
-             continue # Skip this cell if not enough neighbors found
-
-        # Get Z values of valid neighbors
-        neighbor_z = ground_points_xyz[valid_indices, 2]
-
-        # Calculate IDW weights
-        epsilon = 1e-6 # Avoid division by zero
-        weights = 1.0 / (valid_distances**idw_power + epsilon)
-
-        # Calculate interpolated Z
-        interpolated_z = np.sum(weights * neighbor_z) / np.sum(weights)
-
-        interpolated_points.append([center_xy[0], center_xy[1], interpolated_z])
-        num_interpolated += 1
-
-    logger.info(f"Successfully interpolated Z for {num_interpolated} points.")
-
-    if not interpolated_points:
-        return ground_points_xyz
-
-    # 5. Combine original and interpolated points
-    filled_points = np.vstack((ground_points_xyz, np.array(interpolated_points)))
-    logger.info(f"Total points after filling: {filled_points.shape[0]}")
-
-    return filled_points
 
 
 # --- Main Execution ---
@@ -373,7 +343,7 @@ if __name__=='__main__':
     GROUND_CLASS = 2
     GROUND_BLOCK_TOP = "minecraft:grass_block"
     GROUND_BLOCK_BELOW = "minecraft:dirt"
-    GROUND_THICKNESS = 4 # Total thickness including top layer
+    GROUND_THICKNESS = 8 # Total thickness including top layer
 
     # Processing parameters
     PERCENTAGE_TO_REMOVE_NON_GROUND = 0 # Decimation for non-ground features
@@ -475,7 +445,7 @@ if __name__=='__main__':
 
     # ------------------------------ Main Batch Loop ----------------------------- #
     total_batches = BATCH_PER_PRODUCT_SIDE * BATCH_PER_PRODUCT_SIDE
-    for index_batch, (xmin, ymin, xmax, ymax) in enumerate(tqdm(batch_limit_list, desc="Processing Batches")):
+    for index_batch, (xmin, ymin, xmax, ymax) in enumerate(batch_limit_list):
         batch_num = index_batch + 1
         logger.info(f"\n--- Processing Batch {batch_num}/{total_batches} ---")
         logger.info(f"Bounds (X): {xmin:.2f} - {xmax:.2f}, (Y): {ymin:.2f} - {ymax:.2f}")
@@ -491,8 +461,8 @@ if __name__=='__main__':
 
         # Define the origin for this batch (in Minecraft coordinates)
         # Use the minimum corner, flip Y
-        batch_origin_mc_x = int(np.floor(xmin / 100)) # Convert mm to m for MC coords
-        batch_origin_mc_z = int(np.floor(-ymax / 100)) # Convert mm to m, flip Y, use MAX Y as MIN Z
+        batch_origin_mc_x = int(np.floor(xmin)) # Convert mm to m for MC coords
+        batch_origin_mc_z = int(np.floor(-ymax)) # Convert mm to m, flip Y, use MAX Y as MIN Z
         # Note: We will calculate voxel positions relative to this origin.
 
         # Use a dictionary to store final voxel coordinates and block types for this batch
@@ -514,12 +484,8 @@ if __name__=='__main__':
 
             # Apply hole filling
             logger.info("Applying ground hole filling...")
-            filled_ground_points = fill_ground_holes_idw(
+            filled_ground_points = process_point_cloud(
                 xyz_ground_transformed,
-                grid_resolution=INTERPOLATION_GRID_SIZE,
-                search_radius_factor=INTERPOLATION_SEARCH_FACTOR,
-                k_neighbors=INTERPOLATION_K_NEIGHBORS,
-                idw_power=INTERPOLATION_IDW_POWER
             )
 
             logger.info("Voxelizing filled ground points...")
