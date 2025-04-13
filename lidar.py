@@ -330,13 +330,11 @@ if __name__=='__main__':
     FORCE_DOWNLOAD_ALL_TILES_AVAILABLE = False
     filepath_all_tiles_geojson = Path('data/data_grille/all_tiles_available.geojson')
     laz_folderpath = Path('data/raw_point_cloud')
-    # Select *one* tile for processing in this example
-    # TODO: Add logic here to select tile based on order, intersection etc.
-    # For now, hardcode a tile known to exist after download step.
-    tile_filename = 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz' # Example filename
+    tile_filename = 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'
+    tile_filename = 'LHD_FXX_0440_6718_PTS_C_LAMB93_IGN69.copc.laz'
     tile_filepath = laz_folderpath / tile_filename
-    las_name_base = tile_filepath.stem # Use stem for cleaner naming
-
+    las_name_base = tile_filepath.stem 
+    
     # Minecraft parameters
     LOWEST_MINECRAFT_POINT = -60
     HIGHEST_MINECRAFT_POINT = 319 # Not actively used for clipping here, but good to have
@@ -349,7 +347,7 @@ if __name__=='__main__':
     PERCENTAGE_TO_REMOVE_NON_GROUND = 0 # Decimation for non-ground features
     VOXEL_SIDE = 1.0 # Minecraft block size = 1 meter
     MIN_POINTS_PER_VOXEL_NON_GROUND = 3 # Filtering for non-ground features
-    BATCH_PER_PRODUCT_SIDE = 5 # Split 1km tile into 5x5 = 25 batches
+    BATCH_PER_PRODUCT_SIDE = 2 # Split 1km tile into 5x5 = 25 batches
 
     # Ground filling parameters
     INTERPOLATION_GRID_SIZE = 1.0 # Resolution for finding holes (meters)
@@ -388,15 +386,8 @@ if __name__=='__main__':
 
 
     # -------------------------- Optional: Download step ------------------------- #
-    filepath_all_tiles_geojson         = Path('data/data_grille/all_tiles_available.geojson')
     download_ign_available_tiles(filepath_all_tiles_geojson, FORCE_DOWNLOAD_ALL_TILES_AVAILABLE)
-
-    laz_folderpath = Path('data/raw_point_cloud')
     # download_available_tile(filepath_all_tiles_geojson, laz_folderpath)
-
-    tile_filepath = Path('data/raw_point_cloud/LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz')
-    las = laspy.read(tile_filepath)
-
 
     # ------------------------------ Load Lidar Data ----------------------------- #
     logger.info(f"Loading lidar file: {tile_filepath}")
@@ -418,9 +409,9 @@ if __name__=='__main__':
     folder_save_myschem = Path(f"data/myschems/") / las_name_schem
     folder_save_myschem.mkdir(parents=True, exist_ok=True)
 
-    # Calculate batch boundaries (using original scale, before meters conversion)
-    las_x_min, las_x_max = las.x.min(), las.x.max()
-    las_y_min, las_y_max = las.y.min(), las.y.max()
+    # Calculate batch boundaries
+    las_x_min, las_x_max = round(las.x.min()), round(las.x.max())
+    las_y_min, las_y_max = round(las.y.min()), round(las.y.max())
     las_x_len = las_x_max - las_x_min
     las_y_len = las_y_max - las_y_min # Should be similar if square tile
     batch_x_len = las_x_len / BATCH_PER_PRODUCT_SIDE
@@ -438,9 +429,11 @@ if __name__=='__main__':
     ]
 
     # ---------------------------- Generate MCFunction --------------------------- #
-    mcfunction_filepath = Path('data/mcfunctions') / (las_name_schem + '.mcfunction')
+    mcfunction_folderpath = Path('data/mcfunctions')
+    mcfunction_folderpath.mkdir(parents=True, exist_ok=True)
+    mcfunction_filepath = mcfunction_folderpath / (las_name_schem + '.mcfunction')
     text_mcfunction = '# Auto-generated MCFunction for placing lidar data\n'
-    text_mcfunction += '/gamemode spectator @s\n' # Use @s for safety
+    text_mcfunction += '/gamemode spectator @s\n'
     text_mcfunction += '/say Starting lidar placement...\n'
 
     # ------------------------------ Main Batch Loop ----------------------------- #
@@ -450,13 +443,13 @@ if __name__=='__main__':
         logger.info(f"\n--- Processing Batch {batch_num}/{total_batches} ---")
         logger.info(f"Bounds (X): {xmin:.2f} - {xmax:.2f}, (Y): {ymin:.2f} - {ymax:.2f}")
 
-        batch_points = las[(las.x<=xmax) & (las.x>=xmin) & (las.y<=ymax) & (las.y>=ymin)]
+        batch_points:laspy.LasData = las[(las.x<=xmax) & (las.x>=xmin) & (las.y<=ymax) & (las.y>=ymin)]
 
         if len(batch_points) == 0:
             logger.warning(f"Batch {batch_num} contains no points. Skipping.")
             text_mcfunction += f'# Skipping empty batch {batch_num}\n'
             continue
-
+        
         logger.info(f"Batch {batch_num}: Found {len(batch_points)} points.")
 
         # Define the origin for this batch (in Minecraft coordinates)
@@ -469,11 +462,11 @@ if __name__=='__main__':
         # Key: (x, y, z) tuple relative to schematic origin, Value: block_string
         # Minecraft Y corresponds to Lidar Z
         final_voxels = {}
-
+        
         # -------------------------- 1. Process Ground Layer ------------------------- #
         logger.info("Processing Ground Layer...")
-        batch_ground_points = batch_points.points[batch_points.classification == GROUND_CLASS]
-
+        batch_ground_points:laspy.LasData = batch_points.points[batch_points.classification == GROUND_CLASS]
+        
         if len(batch_ground_points) > 0:
             # Transform coordinates to meters, apply Z offset, flip Y
             x =  batch_ground_points.x.array / 100.0
@@ -595,20 +588,8 @@ if __name__=='__main__':
         try:
             schem.save(str(folder_save_myschem), schematic_filename, mcschematic.Version.JE_1_21_1)
             logger.info(f"Saved schematic: {folder_save_myschem / (schematic_filename + '.schem')}")
-
-            # ----------------------- 4. Add Commands to MCFunction ---------------------- #
-            # Teleport command to the batch origin (bottom-north-west corner in MC coords)
-            # Add a height offset so player isn't inside the ground immediately
-            tp_y = LOWEST_MINECRAFT_POINT + 10 # Adjust as needed
-            # Find the lowest ground point Y in this batch to teleport above it?
-            ground_y_values = [vy for (vx, vy, vz), block in final_voxels.items() if block in [GROUND_BLOCK_TOP, GROUND_BLOCK_BELOW]]
-            if ground_y_values:
-                tp_y = max(ground_y_values) + 5 # TP 5 blocks above highest ground/dirt block
-            tp_y = max(tp_y, LOWEST_MINECRAFT_POINT + 5) # Ensure it's not below world
-
-
             text_mcfunction += f'\n/say Placing Batch {batch_num}/{total_batches} at X={batch_origin_mc_x} Z={batch_origin_mc_z}\n'
-            text_mcfunction += f'/tp @s {batch_origin_mc_x} {tp_y} {batch_origin_mc_z}\n'
+            text_mcfunction += f'/tp @s {batch_origin_mc_x} 0 {batch_origin_mc_z}\n'
             text_mcfunction += f'//schematic load {schematic_rel_path}\n'
             text_mcfunction += f'//paste -a\n' 
 
