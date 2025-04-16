@@ -63,7 +63,7 @@ def find_occupied_voxels_vectorized(points_array:np.ndarray,
     if points_array.size == 0:
         return np.empty((0, 3))
 
-    voxel_indices = np.floor(points_array / voxel_size).astype(np.int32)
+    voxel_indices = np.round(points_array / voxel_size).astype(np.int32)
     unique_indices, counts = np.unique(voxel_indices, axis=0, return_counts=True)
     threshold_mask = counts >= min_points_per_voxel
     filtered_indices = unique_indices[threshold_mask]

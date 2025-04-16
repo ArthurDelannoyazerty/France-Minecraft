@@ -12,6 +12,7 @@ import mcschematic
 from scipy.interpolate import LinearNDInterpolator
 # NEW: Import warnings to suppress potential division-by-zero in IDW if needed
 import warnings
+from collections import defaultdict
 
 
 from shapely.geometry import mapping, Polygon # Added Polygon
@@ -233,7 +234,7 @@ def download_available_tile(geojson_all_tiles_available_filepath:Path, laz_folde
 
 
 
-def process_point_cloud(points, cell_size=0.5):
+def interpolate_point_cloud(points, grid_cell_size):
     """
     Processes a 3D point cloud by:
       1. Creating a 2D grid that covers the full XY extent of the point cloud.
@@ -243,25 +244,25 @@ def process_point_cloud(points, cell_size=0.5):
     
     Parameters:
       points (np.ndarray): Nx3 numpy array of points (x, y, z).
-      cell_size (float): grid cell size (default 0.5 meters).
+      grid_cell_size (float): grid cell size (default 0.5 meters).
     
     Returns:
       np.ndarray: The augmented array of points (original + the new points).
     """
-    # display_point_cloud(points)
+    logger.info("Applying ground hole filling...")
 
     # Determine grid bounds (using the points' x-y projection)
     x_min, y_min = np.min(points[:, :2], axis=0)
     x_max, y_max = np.max(points[:, :2], axis=0)
     
     # Determine the number of cells required in each dimension (ceiling)
-    n_cells_x = int(np.floor((x_max - x_min) / cell_size))
-    n_cells_y = int(np.floor((y_max - y_min) / cell_size))
+    n_cells_x = int(np.floor((x_max - x_min) / grid_cell_size))
+    n_cells_y = int(np.floor((y_max - y_min) / grid_cell_size))
     
     # Create an occupancy grid that marks cells with any point present.
     # Compute cell indices (i for x, j for y) for each point.
-    ix = ((points[:, 0] - x_min) / cell_size).astype(np.int32)
-    iy = ((points[:, 1] - y_min) / cell_size).astype(np.int32)
+    ix = ((points[:, 0] - x_min) / grid_cell_size).astype(np.int32)
+    iy = ((points[:, 1] - y_min) / grid_cell_size).astype(np.int32)
 
     # remove the points on the edge of the grid by replacing them by the last cell
     ix[np.argwhere(ix==n_cells_x)] = n_cells_x - 1
@@ -280,12 +281,12 @@ def process_point_cloud(points, cell_size=0.5):
     offsets = np.array([[0.25, 0.25],
                         [0.75, 0.25],
                         [0.25, 0.75],
-                        [0.75, 0.75]]) * cell_size
+                        [0.75, 0.75]]) * grid_cell_size
     
     # Compute the lower left coordinate for each empty cell.
     empty_cell_origin = np.empty((empty_cells.shape[0], 2))
-    empty_cell_origin[:, 0] = x_min + empty_cells[:, 0] * cell_size
-    empty_cell_origin[:, 1] = y_min + empty_cells[:, 1] * cell_size
+    empty_cell_origin[:, 0] = x_min + empty_cells[:, 0] * grid_cell_size
+    empty_cell_origin[:, 1] = y_min + empty_cells[:, 1] * grid_cell_size
     
     # For each empty cell, compute the coordinates for the 4 new sample points.
     # We use broadcasting to add the offsets to each cell's origin.
@@ -330,33 +331,29 @@ if __name__=='__main__':
     FORCE_DOWNLOAD_ALL_TILES_AVAILABLE = False
     filepath_all_tiles_geojson = Path('data/data_grille/all_tiles_available.geojson')
     laz_folderpath = Path('data/raw_point_cloud')
-    tile_filename = 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'
+    # tile_filename = 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'
     tile_filename = 'LHD_FXX_0440_6718_PTS_C_LAMB93_IGN69.copc.laz'
     tile_filepath = laz_folderpath / tile_filename
     las_name_base = tile_filepath.stem 
     
     # Minecraft parameters
     LOWEST_MINECRAFT_POINT = -60
-    HIGHEST_MINECRAFT_POINT = 319 # Not actively used for clipping here, but good to have
+    HIGHEST_MINECRAFT_POINT = 319
     GROUND_CLASS = 2
     GROUND_BLOCK_TOP = "minecraft:grass_block"
     GROUND_BLOCK_BELOW = "minecraft:dirt"
-    GROUND_THICKNESS = 8 # Total thickness including top layer
+    GROUND_THICKNESS = 8
 
     # Processing parameters
-    PERCENTAGE_TO_REMOVE_NON_GROUND = 0 # Decimation for non-ground features
-    VOXEL_SIDE = 1.0 # Minecraft block size = 1 meter
-    MIN_POINTS_PER_VOXEL_NON_GROUND = 3 # Filtering for non-ground features
-    BATCH_PER_PRODUCT_SIDE = 2 # Split 1km tile into 5x5 = 25 batches
+    PERCENTAGE_TO_REMOVE_NON_GROUND = 0     # Decimation for non-ground features
+    VOXEL_SIDE = 0.5
+    MIN_POINTS_PER_VOXEL_NON_GROUND = 3     # Filtering for non-ground features
+    BATCH_PER_PRODUCT_SIDE = 2              # Split 1 tile into BATCH_PER_PRODUCT_SIDE*BATCH_PER_PRODUCT_SIDE batches
 
     # Ground filling parameters
-    INTERPOLATION_GRID_SIZE = 1.0 # Resolution for finding holes (meters)
-    INTERPOLATION_K_NEIGHBORS = 8   # How many neighbors to use for IDW
-    INTERPOLATION_SEARCH_FACTOR = 3.0 # Search radius = factor * grid_size
-    INTERPOLATION_IDW_POWER = 2
+    INTERPOLATION_GRID_CELL_SIZE = 1.0      # Grid resolution for point cloud interpolation
 
-    # Block mapping (using the 'natural' template from the user)
-    order_bloc_creation = [66, 64, 17, 9, 5, 4, 3, 67, 1, 6] # Removed ground (2) - handled separately
+    # Block mapping
     points_classes_name = {
         1 : "No Class", 
         2 : "Ground", 
@@ -371,17 +368,17 @@ if __name__=='__main__':
         67: "Miscellaneous"
     }
     choosen_template_point_classes = {
-        1 : ["minecraft:stone"], # No Class
-       # 2 : ["minecraft:grass_block"], # Ground - Handled separately
-        3 : ["minecraft:short_grass"], # Small Veg
-        4 : ["minecraft:moss_block"],  # Medium Veg
-        5 : ["minecraft:oak_leaves"],  # High Veg
-        6 : ["minecraft:stone_bricks"],# Building
-        9 : ["minecraft:blue_stained_glass"], # Water
-        17: ["minecraft:polished_blackstone"], # Bridge
-        64: ["minecraft:dirt_path"],   # Perennial Soil
-        66: ["minecraft:diorite"],     # Virtual Points
-        67: ["minecraft:basalt"],      # Miscellaneous
+        1 : ["minecraft:stone"],
+        2 : ["minecraft:grass_block"],
+        3 : ["minecraft:short_grass"], 
+        4 : ["minecraft:moss_block"],
+        5 : ["minecraft:oak_leaves"],
+        6 : ["minecraft:stone_bricks"],
+        9 : ["minecraft:blue_stained_glass"],
+        17: ["minecraft:polished_blackstone"],
+        64: ["minecraft:dirt_path"],
+        66: ["minecraft:diorite"],
+        67: ["minecraft:basalt"],
     }
 
 
@@ -432,6 +429,9 @@ if __name__=='__main__':
     mcfunction_folderpath = Path('data/mcfunctions')
     mcfunction_folderpath.mkdir(parents=True, exist_ok=True)
     mcfunction_filepath = mcfunction_folderpath / (las_name_schem + '.mcfunction')
+
+    
+    
     text_mcfunction = '# Auto-generated MCFunction for placing lidar data\n'
     text_mcfunction += '/gamemode spectator @s\n'
     text_mcfunction += '/say Starting lidar placement...\n'
@@ -443,6 +443,7 @@ if __name__=='__main__':
         logger.info(f"\n--- Processing Batch {batch_num}/{total_batches} ---")
         logger.info(f"Bounds (X): {xmin:.2f} - {xmax:.2f}, (Y): {ymin:.2f} - {ymax:.2f}")
 
+        schem = mcschematic.MCSchematic()
         batch_points:laspy.LasData = las[(las.x<=xmax) & (las.x>=xmin) & (las.y<=ymax) & (las.y>=ymin)]
 
         if len(batch_points) == 0:
@@ -456,146 +457,71 @@ if __name__=='__main__':
         # Use the minimum corner, flip Y
         batch_origin_mc_x = int(np.floor(xmin)) # Convert mm to m for MC coords
         batch_origin_mc_z = int(np.floor(-ymax)) # Convert mm to m, flip Y, use MAX Y as MIN Z
-        # Note: We will calculate voxel positions relative to this origin.
+        
+        voxel_origin_x_m = xmin
+        voxel_origin_y_m_flipped = -ymax
 
-        # Use a dictionary to store final voxel coordinates and block types for this batch
-        # Key: (x, y, z) tuple relative to schematic origin, Value: block_string
-        # Minecraft Y corresponds to Lidar Z
-        final_voxels = {}
+         # --- Store voxels temporarily per class ---
+        voxels_by_class = defaultdict(set) # {class_id: set((x,y,z)), ...} -> Stores RELATIVE integer coords
         
-        # -------------------------- 1. Process Ground Layer ------------------------- #
-        logger.info("Processing Ground Layer...")
-        batch_ground_points:laspy.LasData = batch_points.points[batch_points.classification == GROUND_CLASS]
-        
+        # --- 1a. Process Ground (Interpolation & Initial Voxelization) ---
+        logger.info("Processing Ground Layer (Interpolation & Voxelization)...")
+        ground_mask = batch_points.classification == GROUND_CLASS
+        batch_ground_points = batch_points[ground_mask]
+        potential_ground_voxels_relative = set() # Store relative integer coords
+
         if len(batch_ground_points) > 0:
-            # Transform coordinates to meters, apply Z offset, flip Y
-            x =  batch_ground_points.x.array / 100.0
-            y =  batch_ground_points.y.array / 100.0 * -1 # Flip Y
-            z = (batch_ground_points.z.array / 100.0) + z_axis_translate
+            x = batch_ground_points.x
+            y = batch_ground_points.y * -1                 # Flip Y
+            z = batch_ground_points.z + z_axis_translate
             xyz_ground_transformed = np.vstack([x, y, z]).T
 
+            filled_ground_points = interpolate_point_cloud(xyz_ground_transformed, grid_cell_size=INTERPOLATION_GRID_CELL_SIZE)
 
-            # Apply hole filling
-            logger.info("Applying ground hole filling...")
-            filled_ground_points = process_point_cloud(
-                xyz_ground_transformed,
-            )
+            # Voxelize relative to batch origin
+            points_relative_to_voxel_origin = filled_ground_points - [voxel_origin_x_m, voxel_origin_y_m_flipped, 0]
 
             logger.info("Voxelizing filled ground points...")
-            # Use min_points_per_voxel=1 for filled ground
-            voxel_origins_ground = find_occupied_voxels_vectorized(
-                filled_ground_points,
+            voxel_origins_ground_relative_m = find_occupied_voxels_vectorized(
+                points_relative_to_voxel_origin,
                 voxel_size=VOXEL_SIDE,
-                min_points_per_voxel=1 # IMPORTANT: Use 1 for filled ground
+                min_points_per_voxel=1 # Use 1 for filled ground
             )
-            voxel_origins_ground_relative = voxel_origins_ground - [xmin, -ymin, 0]
 
-            logger.info(f"Found {voxel_origins_ground_relative.shape[0]} ground voxels.")
-
-            # Add ground voxels to the final list
-            for coord in voxel_origins_ground_relative:
-                 # Convert float origins to integer block coordinates
-                 mc_x = int(coord[0])
-                 mc_y = int(coord[2]) # Lidar Z -> MC Y
-                 mc_z = int(coord[1]) # Lidar Y -> MC Z
-
-                 # Add Grass Layer
-                 final_voxels[(mc_x, mc_y, mc_z)] = GROUND_BLOCK_TOP
-
-                 # Add Dirt Layers Below (up to GROUND_THICKNESS)
-                 for i in range(1, GROUND_THICKNESS):
-                     dirt_coord = (mc_x, mc_y - i, mc_z)
-                     # Ensure dirt doesn't go below world limit
-                     if dirt_coord[1] >= LOWEST_MINECRAFT_POINT:
-                        # Only add dirt if the space isn't already taken by grass from a lower elevation
-                        # (though this shouldn't happen if ground is mostly surface)
-                        if dirt_coord not in final_voxels:
-                           final_voxels[dirt_coord] = GROUND_BLOCK_BELOW
-                     else:
-                         break # Stop going deeper if below world limit
-
+            # Convert float meter origins to relative integer block coordinates
+            for coord_m in voxel_origins_ground_relative_m:
+                mc_x = int(coord_m[0])
+                mc_y = int(coord_m[2]) # Lidar Z -> MC Y
+                mc_z = int(coord_m[1]) # Lidar Y (flipped) -> MC Z
+                potential_ground_voxels_relative.add((mc_x, mc_y, mc_z))
+                try:
+                    schem.setBlock((mc_x, mc_y, mc_z),   GROUND_BLOCK_TOP)
+                    schem.setBlock((mc_x, mc_y-1, mc_z), GROUND_BLOCK_BELOW)
+                    schem.setBlock((mc_x, mc_y-2, mc_z), GROUND_BLOCK_BELOW)
+                    schem.setBlock((mc_x, mc_y-3, mc_z), GROUND_BLOCK_BELOW)
+                    schem.setBlock((mc_x, mc_y-4, mc_z), GROUND_BLOCK_BELOW)
+                    schem.setBlock((mc_x, mc_y-5, mc_z), GROUND_BLOCK_BELOW)
+                    schem.setBlock((mc_x, mc_y-6, mc_z), GROUND_BLOCK_BELOW)
+                    schem.setBlock((mc_x, mc_y-7, mc_z), GROUND_BLOCK_BELOW)
+                except:
+                    pass
         else:
-            logger.warning(f"Batch {batch_num} has no ground points. Ground layer will be empty.")
+            logger.warning(f"Batch {batch_num} has no ground points.")
 
 
-        # -------------------------- 2. Process Other Layers ------------------------- #
-        logger.info("Processing Other Layers...")
-        for point_class in order_bloc_creation: # Iterate through non-ground classes
-            class_name = points_classes_name.get(point_class, f"Unknown ({point_class})")
-            logger.debug(f"Processing class: {class_name} ({point_class})")
 
-            batch_class_points = batch_points.points[batch_points.classification == point_class]
-
-            if len(batch_class_points) == 0:
-                logger.debug(f"No points for class {class_name} in this batch.")
-                continue
-
-            # Transform coordinates
-            x =  batch_class_points.x.array / 100.0
-            y =  batch_class_points.y.array / 100.0 * -1 # Flip Y
-            z = (batch_class_points.z.array / 100.0) + z_axis_translate
-            xyz_class_transformed = np.vstack([x, y, z]).T
-
-            # Optional Decimation for non-ground
-            if PERCENTAGE_TO_REMOVE_NON_GROUND > 0:
-                 xyz_class_transformed = decimate_array(xyz_class_transformed, PERCENTAGE_TO_REMOVE_NON_GROUND)
-                 if xyz_class_transformed.shape[0] == 0:
-                     logger.debug(f"All points decimated for class {class_name}.")
-                     continue
-
-
-            voxel_origins_class = find_occupied_voxels_vectorized(
-                xyz_class_transformed,
-                voxel_size=VOXEL_SIDE,
-                min_points_per_voxel=MIN_POINTS_PER_VOXEL_NON_GROUND
-            )
-            voxel_origins_class_relative = voxel_origins_class - [xmin, -ymin, 0]
-
-            block = choosen_template_point_classes[point_class][0] # Get block type
-            logger.debug(f"Found {voxel_origins_class_relative.shape[0]} voxels for class {class_name}.")
-
-            # Add voxels, potentially overwriting ground/lower layers
-            for coord in voxel_origins_class_relative:
-                mc_x = int(np.floor(coord[0] / VOXEL_SIDE))
-                mc_y = int(np.floor(coord[2] / VOXEL_SIDE)) # Lidar Z -> MC Y
-                mc_z = int(np.floor(coord[1] / VOXEL_SIDE)) # Lidar Y -> MC Z
-                voxel_coord = (mc_x, mc_y, mc_z)
-
-                # Check if coordinate is within valid MC height range
-                if LOWEST_MINECRAFT_POINT <= mc_y < HIGHEST_MINECRAFT_POINT + 1 : # +1 because range is exclusive at top
-                    final_voxels[voxel_coord] = block
-                # else:
-                    # logger.debug(f"Skipping voxel at {voxel_coord} (Y={mc_y}) - outside valid height range.")
-
-
-        # ----------------------- 3. Create and Save Schematic ----------------------- #
-        if not final_voxels:
-            logger.warning(f"Batch {batch_num} resulted in no voxels. Skipping schematic generation.")
-            text_mcfunction += f'# Skipping empty batch {batch_num} schematic\n'
-            continue
-
-        logger.info(f"Creating schematic for batch {batch_num} with {len(final_voxels)} blocks.")
-        schem = mcschematic.MCSchematic()
-        for (vx, vy, vz), block_id in final_voxels.items():
-            # Coordinates are already relative to the schematic origin
-            schem.setBlock((vx, vy, vz), block_id)
-
-        # Naming convention: batch number, total batches, and MC origin coords
         schematic_filename = f"b_{batch_num}_of_{total_batches}~x_{batch_origin_mc_x}~z_{batch_origin_mc_z}"
         schematic_rel_path = f"{las_name_schem}/{schematic_filename}.schem" # Relative path for commands
 
-        # Try saving the schematic
-        try:
-            schem.save(str(folder_save_myschem), schematic_filename, mcschematic.Version.JE_1_21_1)
-            logger.info(f"Saved schematic: {folder_save_myschem / (schematic_filename + '.schem')}")
-            text_mcfunction += f'\n/say Placing Batch {batch_num}/{total_batches} at X={batch_origin_mc_x} Z={batch_origin_mc_z}\n'
-            text_mcfunction += f'/tp @s {batch_origin_mc_x} 0 {batch_origin_mc_z}\n'
-            text_mcfunction += f'//schematic load {schematic_rel_path}\n'
-            text_mcfunction += f'//paste -a\n' 
+        schem.save(str(folder_save_myschem), schematic_filename, mcschematic.Version.JE_1_21_1)
+        logger.info(f"Saved schematic: {folder_save_myschem / (schematic_filename + '.schem')}")
 
-        except Exception as e:
-             logger.error(f"Failed to save schematic or generate commands for batch {batch_num}: {e}")
-             text_mcfunction += f'# ERROR: Failed to save schematic for batch {batch_num}\n'
+        # --- Add Commands to MCFunction ---
+        text_mcfunction += f'\n/say Placing Batch {batch_num}/{total_batches} at X={batch_origin_mc_x} Z={batch_origin_mc_z}\n'
+        text_mcfunction += f'/tp @s {batch_origin_mc_x} 0 {batch_origin_mc_z}\n'
+        text_mcfunction += f'//schematic load {schematic_rel_path}\n'
+        text_mcfunction += f'//paste -a\n' 
+
 
 
     # ---------------------------- Finalize MCFunction --------------------------- #
