@@ -348,7 +348,7 @@ if __name__=='__main__':
     PERCENTAGE_TO_REMOVE_NON_GROUND = 0     # Decimation for non-ground features
     VOXEL_SIDE = 0.5
     MIN_POINTS_PER_VOXEL_NON_GROUND = 3     # Filtering for non-ground features
-    BATCH_PER_PRODUCT_SIDE = 2              # Split 1 tile into BATCH_PER_PRODUCT_SIDE*BATCH_PER_PRODUCT_SIDE batches
+    BATCH_PER_PRODUCT_SIDE = 3              # Split 1 tile into BATCH_PER_PRODUCT_SIDE*BATCH_PER_PRODUCT_SIDE batches
 
     # Ground filling parameters
     INTERPOLATION_GRID_CELL_SIZE = 1.0      # Grid resolution for point cloud interpolation
@@ -433,6 +433,9 @@ if __name__=='__main__':
     
     
     text_mcfunction = '# Auto-generated MCFunction for placing lidar data\n'
+    text_mcfunction += '/gamerule doDaylightCycle false\n'
+    text_mcfunction += '/time set day\n'
+    text_mcfunction += '/gamerule randomTickSpeed 0\n'
     text_mcfunction += '/gamemode spectator @s\n'
     text_mcfunction += '/say Starting lidar placement...\n'
 
@@ -468,7 +471,7 @@ if __name__=='__main__':
         logger.info("Processing Ground Layer (Interpolation & Voxelization)...")
         ground_mask = batch_points.classification == GROUND_CLASS
         batch_ground_points = batch_points[ground_mask]
-        potential_ground_voxels_relative = set() # Store relative integer coords
+        set_ground_voxels = set() # Store relative integer coords
 
         if len(batch_ground_points) > 0:
             x = batch_ground_points.x
@@ -488,14 +491,15 @@ if __name__=='__main__':
                 min_points_per_voxel=1 # Use 1 for filled ground
             )
 
-            # Convert float meter origins to relative integer block coordinates
-            for coord_m in voxel_origins_ground_relative_m:
-                mc_x = int(coord_m[0])
-                mc_y = int(coord_m[2]) # Lidar Z -> MC Y
-                mc_z = int(coord_m[1]) # Lidar Y (flipped) -> MC Z
-                potential_ground_voxels_relative.add((mc_x, mc_y, mc_z))
+            
+
+            # Add ground blocks (Grass & Dirt)
+            logger.info("Creating ground blocks...")
+            voxel_origins_ground_relative_m_int = voxel_origins_ground_relative_m.astype(np.int32)
+            for mc_x, mc_z, mc_y in tqdm(voxel_origins_ground_relative_m_int, desc='Creating Ground'):
+                set_ground_voxels.add((int(mc_x), int(mc_y), int(mc_z)))
                 try:
-                    schem.setBlock((mc_x, mc_y, mc_z),   GROUND_BLOCK_TOP)
+                    schem.setBlock((mc_x, mc_y,   mc_z), GROUND_BLOCK_TOP  )
                     schem.setBlock((mc_x, mc_y-1, mc_z), GROUND_BLOCK_BELOW)
                     schem.setBlock((mc_x, mc_y-2, mc_z), GROUND_BLOCK_BELOW)
                     schem.setBlock((mc_x, mc_y-3, mc_z), GROUND_BLOCK_BELOW)
@@ -505,6 +509,28 @@ if __name__=='__main__':
                     schem.setBlock((mc_x, mc_y-7, mc_z), GROUND_BLOCK_BELOW)
                 except:
                     pass
+            
+            # Filter lone ground block 
+            logger.info("Filtering lone ground blocks...")
+            nb_grass_block, nb_lone_grass_block = 0, 0
+            for x, y, z in tqdm(set_ground_voxels, desc='Filtering Lone Ground Blocks'):
+                current_block_state = schem.getBlockDataAt((x,y,z))
+                if current_block_state!=GROUND_BLOCK_TOP: continue
+                nb_grass_block += 1
+                block_state_north = schem.getBlockDataAt((x,   y, z-1))
+                block_state_south = schem.getBlockDataAt((x,   y, z+1))
+                block_state_east  = schem.getBlockDataAt((x+1, y, z  ))
+                block_state_west  = schem.getBlockDataAt((x-1, y, z  ))
+                # If no neighbors, remove current block and replace dirt block below by grass
+                if (block_state_north=='minecraft:air' and 
+                    block_state_south=='minecraft:air' and 
+                    block_state_east =='minecraft:air' and 
+                    block_state_west =='minecraft:air'):
+                    nb_lone_grass_block += 1
+                    schem.setBlock((x, y, z), 'minecraft:air')
+                    # schem.setBlock((x, y, z), GROUND_BLOCK_TOP)
+            logger.info(f'Total grass block : {nb_grass_block}  |  Lone grass block removed : {nb_lone_grass_block}')
+
         else:
             logger.warning(f"Batch {batch_num} has no ground points.")
 
