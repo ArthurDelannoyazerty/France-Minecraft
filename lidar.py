@@ -515,8 +515,8 @@ if __name__=='__main__':
         voxels_by_class = defaultdict(set) # {class_id: set((x,y,z)), ...} -> Stores RELATIVE integer coords
         
         # --- 1a. Process Ground (Interpolation & Initial Voxelization) ---
-        DO_GROUND = False
-        if DO_GROUND:
+        DO_GROUND = True
+        def do_ground():
             logger.info("Processing Ground Layer (Interpolation & Voxelization)...")
             ground_mask = batch_points.classification == GROUND_CLASS
             batch_ground_points = batch_points[ground_mask]
@@ -525,7 +525,7 @@ if __name__=='__main__':
             if len(batch_ground_points) > 0:
                 x = batch_ground_points.x
                 y = batch_ground_points.y * -1                 # Flip Y
-                z = batch_ground_points.z + z_axis_translate - 0.5
+                z = batch_ground_points.z + z_axis_translate
                 xyz_ground_transformed = np.vstack([x, y, z]).T
 
                 filled_ground_points = interpolate_point_cloud(xyz_ground_transformed, grid_cell_size=INTERPOLATION_GRID_CELL_SIZE)
@@ -583,6 +583,7 @@ if __name__=='__main__':
             else:
                 logger.warning(f"Batch {batch_num} has no ground points.")
 
+        if DO_GROUND: do_ground()
 
         # --- 2. Process other points class ---
         # For each voxel, what is the main class ?
@@ -590,39 +591,135 @@ if __name__=='__main__':
         # For some classes, check the 1/8 of the voxels to check for partial block placement
 
         logger.info("Processing othher point classes")
-        point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
+        def coords_no_ground_points():
+            point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
 
-        # Voxelize the points for each class
-        point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
+            # Voxelize the points for each class
+            point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
 
-        for point_class in tqdm(point_classes_no_ground, desc='Voxelize points no ground'):
-            mask = batch_points.classification == point_class
-            batch_ground_points_no_ground = batch_points[mask]
+            for point_class in tqdm(point_classes_no_ground, desc='Voxelize points no ground'):
+                mask = batch_points.classification == point_class
+                batch_ground_points_no_ground = batch_points[mask]
 
-            x = batch_ground_points_no_ground.x
-            y = batch_ground_points_no_ground.y * -1                 # Flip Y
-            z = batch_ground_points_no_ground.z + z_axis_translate
-            xyz_no_ground = np.vstack([x, y, z]).T
+                x = batch_ground_points_no_ground.x
+                y = batch_ground_points_no_ground.y * -1                 # Flip Y
+                z = batch_ground_points_no_ground.z + z_axis_translate
+                xyz_no_ground = np.vstack([x, y, z]).T
 
-            points_relative_to_voxel_origin = xyz_no_ground - [voxel_origin_x_m, voxel_origin_y_m_flipped, 0]
-            
-            voxel_origins_relative_m = find_occupied_voxels_vectorized(
-                points_relative_to_voxel_origin,
-                voxel_size=VOXEL_SIDE,
-                min_points_per_voxel=0
-            )
-            point_coordinates[point_class] = voxel_origins_relative_m
+                points_relative_to_voxel_origin = xyz_no_ground - [voxel_origin_x_m, voxel_origin_y_m_flipped, 0]
+                
+                voxel_origins_relative_m = find_occupied_voxels_vectorized(
+                    points_relative_to_voxel_origin,
+                    voxel_size=VOXEL_SIDE,
+                    min_points_per_voxel=0
+                )
+                point_coordinates[point_class] = voxel_origins_relative_m
+
+            dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
+            return dominant_per_voxel, filtered_points
+
+        _, filtered_points = coords_no_ground_points()
 
 
-
-
-        dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
-
-
-        for point_class, coordinates in filtered_points.items():
-            bloc_type = choosen_template_point_classes[point_class]
+        # Do "No Class":
+        def do_No_Class(coordinates):
+            bloc_type = choosen_template_point_classes[1]
             for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air':
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+                    
+        def do_Small_Vegetation(coordinates):
+            bloc_type = choosen_template_point_classes[3]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state==GROUND_BLOCK_TOP:
+                    above_block_state = schem.getBlockDataAt((int(x),int(z+1),int(y)))
+                    if above_block_state==GROUND_BLOCK_TOP:
+                        continue
+                    else: 
+                        z += 1
                 schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        
+        
+        def do_Medium_Vegetation(coordinates):
+            bloc_type = choosen_template_point_classes[4]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        
+        
+        def do_High_Vegetation(coordinates):
+            bloc_type = choosen_template_point_classes[5]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        
+        
+        def do_Building(coordinates):
+            bloc_type = choosen_template_point_classes[6]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+                # Extend the building block to the ground
+                for z_below in range(int(z), LOWEST_MINECRAFT_POINT, -1):
+                    below_block_state = schem.getBlockDataAt((int(x),int(z_below),int(y)))
+                    if below_block_state==GROUND_BLOCK_TOP:
+                        break
+                    schem.setBlock((int(x),int(z_below),int(y)), bloc_type[0])
+
+        def do_Water(coordinates):
+            bloc_type = choosen_template_point_classes[9]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+        def do_Bridge(coordinates):
+            bloc_type = choosen_template_point_classes[17]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+        def do_Perennial_Soil(coordinates):
+            bloc_type = choosen_template_point_classes[64]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+        def do_Virtual_Points(coordinates):
+            bloc_type = choosen_template_point_classes[66]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+        def do_Miscellaneous(coordinates):
+            bloc_type = choosen_template_point_classes[67]
+            for x,y,z in coordinates:
+                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+
+        
+        do_No_Class(filtered_points[1])
+        do_Small_Vegetation(filtered_points[3])
+        do_Medium_Vegetation(filtered_points[4])
+        do_High_Vegetation(filtered_points[5])
+        do_Building(filtered_points[6])
+        do_Water(filtered_points[9])
+        do_Bridge(filtered_points[17])
+        do_Perennial_Soil(filtered_points[64])
+        do_Virtual_Points(filtered_points[66])
+        do_Miscellaneous(filtered_points[67])
+
 
 
 
