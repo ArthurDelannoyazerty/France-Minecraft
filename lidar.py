@@ -310,7 +310,56 @@ def interpolate_point_cloud(points, grid_cell_size):
     # display_point_cloud(all_points)
     return all_points
 
+import math
+from collections import defaultdict, Counter
+from typing import Dict, List, Tuple, Any
 
+Point = Tuple[float, float, float]
+Class = str
+
+def dominant_voxel_points(
+    point_coordinates: Dict[Class, List[Point]]
+) -> Tuple[Dict[Tuple[int,int,int], Class], Dict[Class, List[Point]]]:
+    """
+    Given a mapping from point-class → list of (x,y,z) coordinates (floats in 0.5 increments),
+    treats each integer-floored (x,y,z) as a “voxel”.  Determines:
+
+      1. dominant_per_voxel: for each voxel, which class has the most points in that voxel
+         (ties broken by choosing the smaller class identifier).
+      2. filtered_points: for each class, the subset of its input points that lie in a voxel
+         where it is dominant.
+
+    Returns
+    -------
+    dominant_per_voxel : dict[ (i,j,k) → class ]
+    filtered_points    : dict[ class → list of (x,y,z) ]
+    """
+    # 1) count per-voxel, per-class
+    voxel_counts: Dict[Tuple[int,int,int], Counter] = defaultdict(Counter)
+    for cls, pts in point_coordinates.items():
+        for x,y,z in pts:
+            voxel = (math.floor(x), math.floor(y), math.floor(z))
+            voxel_counts[voxel][cls] += 1
+
+    # 2) pick dominant class in each voxel
+    dominant_per_voxel: Dict[Tuple[int,int,int], Class] = {}
+    for voxel, cnts in voxel_counts.items():
+        # sort by (-count, class) so that highest count wins, tie → smaller class id
+        dominant_cls, _ = sorted(
+            cnts.items(),
+            key=lambda item: (-item[1], item[0])
+        )[0]
+        dominant_per_voxel[voxel] = dominant_cls
+
+    # 3) filter original points
+    filtered_points: Dict[Class, List[Point]] = {cls: [] for cls in point_coordinates}
+    for cls, pts in point_coordinates.items():
+        for x,y,z in pts:
+            voxel = (math.floor(x), math.floor(y), math.floor(z))
+            if dominant_per_voxel[voxel] == cls:
+                filtered_points[cls].append((x,y,z))
+
+    return dominant_per_voxel, filtered_points
 
 
 
@@ -567,118 +616,13 @@ if __name__=='__main__':
 
 
 
-        # Count the number of point class per block
-        point_coordinates_count = dict()       # {(x1,y1,z1): {c1: n1}}
-        for point_class, point_class_coordinate in tqdm(point_coordinates.items(), total=len(point_coordinates), desc='Count Points'):
-            for mc_x, mc_y, mc_z in point_class_coordinate:
-                block_coordinate = (int(mc_x), int(mc_y), int(mc_z))
-                if block_coordinate not in point_coordinates_count:
-                    point_coordinates_count[block_coordinate] = dict()
-                if point_class not in point_coordinates_count[block_coordinate]:
-                    point_coordinates_count[block_coordinate][point_class] = 0
-                point_coordinates_count[block_coordinate][point_class] += 1
+        dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
 
 
-        # For each voxel, what point class is dominant
-        dominant_class_coordinate = dict()      # {(x1, y1, z1): point_class}
-        for coordinate, dict_class_count in tqdm(point_coordinates_count.items(), total=len(point_coordinates_count), desc='Dominant Class'):
-            dominant_class = max(dict_class_count, key=dict_class_count.get)
-            dominant_class_coordinate[coordinate] = dominant_class
-
-
-        # for each class, for each coordinate, get the 8 sub block coordinate 
-        # --- Filter coordinates based on dominant class ---
-        # We want to know, for each class, which voxels it dominates.
-        # This filters the original point_coordinates list.
-
-        dominant_voxels_by_class = defaultdict(list) # {point_class: [(x,y,z), ...]}
-
-        logger.info("Filtering coordinates to keep only those within their dominant class voxel...")
-        # Iterate through the voxels where we know the dominant class
-        for coordinate, dominant_class in tqdm(dominant_class_coordinate.items(), desc="Filtering Dominant Voxels"):
-            # Check if this coordinate was originally associated with this dominant_class
-            # This check is somewhat redundant given how dominant_class_coordinate was built,
-            # but ensures correctness if the logic changes. More importantly, it structures
-            # the data correctly for the next step.
-            # We retrieve the list of coordinates originally found for this dominant_class
-            original_coords_for_class = point_coordinates.get(dominant_class, [])
-            # Although coordinate *must* be in original_coords_for_class by definition
-            # of dominant_class_coordinate, we add it to our result structure.
-            # This loop effectively reorganizes dominant_class_coordinate into a
-            # class-keyed dictionary.
-            if coordinate in original_coords_for_class: # This check might be redundant but confirms logic
-                 dominant_voxels_by_class[dominant_class].append(coordinate)
-            # A potentially faster way if point_coordinates is large and dominant_class_coordinate is the primary source:
-            # dominant_voxels_by_class[dominant_class].append(coordinate) # Directly append based on dominance
-
-        # Log counts for verification
-        for pc, coords in dominant_voxels_by_class.items():
-            logger.debug(f"Class {pc} is dominant in {len(coords)} voxels.")
-
-
-        # --- Place blocks based on dominant class ---
-        logger.info("Placing blocks for non-ground features based on dominant class...")
-        placed_non_ground_count = 0
-        skipped_due_to_ground_count = 0
-        skipped_due_to_other_count = 0
-
-        # Iterate through each class that dominated at least one voxel
-        for point_class, list_of_coordinates in tqdm(dominant_voxels_by_class.items(), desc="Placing Dominant Blocks"):
-            # Get the corresponding Minecraft block name from the configuration
-            # Use .get() for safety, provide a default (e.g., stone), and take the first element if it's a list
-            block_name_list = choosen_template_point_classes.get(point_class, ["minecraft:stone"])
-            block_name = block_name_list[0] if block_name_list else "minecraft:stone" # Ensure we have a block name
-
-            # Iterate through the coordinates where this class is dominant
-            for mc_x, mc_y, mc_z in list_of_coordinates:
-                # Ensure coordinates are integers
-                mc_x, mc_y, mc_z = int(mc_x), int(mc_y), int(mc_z)
-                coord_tuple = (mc_x, mc_y, mc_z)
-
-                # --- CRITICAL CHECK: Avoid overwriting ground ---
-                # Check if this voxel coordinate was part of the generated ground surface
-                # Need access to the ground voxels generated earlier. Assuming 'set_ground_voxels' exists and holds relative coords.
-                # We also need to check blocks *below* the surface voxel, as ground has thickness.
-                is_ground_or_below = False
-                if DO_GROUND: # Only check if ground processing was enabled
-                    for i in range(GROUND_THICKNESS): # Check the voxel and those below it
-                        if (mc_x, mc_y - i, mc_z) in set_ground_voxels:
-                            is_ground_or_below = True
-                            break
-
-                if is_ground_or_below:
-                    skipped_due_to_ground_count += 1
-                    # logger.debug(f"Skipping block at {coord_tuple} for class {point_class}: Voxel is part of ground layer.")
-                    continue # Skip placing this block
-
-                # --- Check if block is already occupied by another non-ground feature ---
-                # This prevents features from lower-priority classes (processed later if dict order matters)
-                # or potentially from the same class if coordinates somehow overlap (unlikely here)
-                # from overwriting existing placements.
-                current_block_in_schem = schem.getBlockDataAt(coord_tuple)
-                if current_block_in_schem != 'minecraft:air':
-                    skipped_due_to_other_count +=1
-                    # logger.debug(f"Skipping block at {coord_tuple} for class {point_class}: Voxel already occupied by {current_block_in_schem}.")
-                    continue # Skip placing this block
-
-
-                # --- Place the block ---
-                try:
-                    # Check Minecraft height limits BEFORE placing
-                    if LOWEST_MINECRAFT_POINT <= mc_y <= HIGHEST_MINECRAFT_POINT:
-                        schem.setBlock(coord_tuple, block_name)
-                        placed_non_ground_count += 1
-                    else:
-                        # Optional: Log blocks outside height limits
-                        # logger.warning(f"Skipping block at {coord_tuple} for class {point_class}: Y coordinate {mc_y} outside Minecraft limits [{LOWEST_MINECRAFT_POINT}, {HIGHEST_MINECRAFT_POINT}].")
-                        pass # Silently skip if outside limits
-
-                except Exception as e:
-                     # Log error if block placement fails for other reasons
-                     logger.warning(f"Failed to set block {block_name} at {coord_tuple} for class {point_class}: {e}")
-
-
-
+        for point_class, coordinates in filtered_points.items():
+            bloc_type = choosen_template_point_classes[point_class]
+            for x,y,z in coordinates:
+                schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
 
 
 
