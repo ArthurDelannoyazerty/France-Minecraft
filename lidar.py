@@ -525,8 +525,8 @@ if __name__=='__main__':
                     block_state_east =='minecraft:air' and 
                     block_state_west =='minecraft:air'):
                     nb_lone_grass_block += 1
-                    schem.setBlock((x, y, z), 'minecraft:air')
-                    # schem.setBlock((x, y, z), GROUND_BLOCK_TOP)
+                    schem.setBlock((x, y,   z), 'minecraft:air')
+                    schem.setBlock((x, y-1, z), GROUND_BLOCK_TOP)
             logger.info(f'Total grass block : {nb_grass_block}  |  Lone grass block removed : {nb_lone_grass_block}')
 
         else:
