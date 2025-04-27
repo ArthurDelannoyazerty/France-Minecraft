@@ -275,13 +275,11 @@ def interpolate_point_cloud(points, grid_cell_size):
     # Identify indices (i,j) of the empty cells
     empty_cells = np.argwhere(~occupancy)  # each row: [i, j]
     
-    # Prepare the 4 sample offsets within a cell.
-    # Here we choose 4 positions placed evenly inside the cell.
-    # They are offset by 1/4 and 3/4 of the cell size from the lower left corner.
-    offsets = np.array([[0.25, 0.25],
-                        [0.75, 0.25],
-                        [0.25, 0.75],
-                        [0.75, 0.75]]) * grid_cell_size
+    # Set new points for each empty cells
+
+    offsets_list = [[x/10,y/10] for x in range(1, 10) for y in range(1, 10)]
+    offsets = np.array(offsets_list) * grid_cell_size
+    
     
     # Compute the lower left coordinate for each empty cell.
     empty_cell_origin = np.empty((empty_cells.shape[0], 2))
