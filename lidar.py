@@ -466,74 +466,223 @@ if __name__=='__main__':
         voxels_by_class = defaultdict(set) # {class_id: set((x,y,z)), ...} -> Stores RELATIVE integer coords
         
         # --- 1a. Process Ground (Interpolation & Initial Voxelization) ---
-        logger.info("Processing Ground Layer (Interpolation & Voxelization)...")
-        ground_mask = batch_points.classification == GROUND_CLASS
-        batch_ground_points = batch_points[ground_mask]
-        set_ground_voxels = set() # Store relative integer coords
+        DO_GROUND = False
+        if DO_GROUND:
+            logger.info("Processing Ground Layer (Interpolation & Voxelization)...")
+            ground_mask = batch_points.classification == GROUND_CLASS
+            batch_ground_points = batch_points[ground_mask]
+            set_ground_voxels = set() # Store relative integer coords
 
-        if len(batch_ground_points) > 0:
-            x = batch_ground_points.x
-            y = batch_ground_points.y * -1                 # Flip Y
-            z = batch_ground_points.z + z_axis_translate
-            xyz_ground_transformed = np.vstack([x, y, z]).T
+            if len(batch_ground_points) > 0:
+                x = batch_ground_points.x
+                y = batch_ground_points.y * -1                 # Flip Y
+                z = batch_ground_points.z + z_axis_translate - 0.5
+                xyz_ground_transformed = np.vstack([x, y, z]).T
 
-            filled_ground_points = interpolate_point_cloud(xyz_ground_transformed, grid_cell_size=INTERPOLATION_GRID_CELL_SIZE)
+                filled_ground_points = interpolate_point_cloud(xyz_ground_transformed, grid_cell_size=INTERPOLATION_GRID_CELL_SIZE)
 
-            # Voxelize relative to batch origin
-            points_relative_to_voxel_origin = filled_ground_points - [voxel_origin_x_m, voxel_origin_y_m_flipped, 0]
+                # Voxelize relative to batch origin
+                points_relative_to_voxel_origin = filled_ground_points - [voxel_origin_x_m, voxel_origin_y_m_flipped, 0]
 
-            logger.info("Voxelizing filled ground points...")
-            voxel_origins_ground_relative_m = find_occupied_voxels_vectorized(
+                logger.info("Voxelizing filled ground points...")
+                voxel_origins_ground_relative_m = find_occupied_voxels_vectorized(
+                    points_relative_to_voxel_origin,
+                    voxel_size=VOXEL_SIDE,
+                    min_points_per_voxel=0
+                )
+
+                
+
+                # Add ground blocks (Grass & Dirt)
+                logger.info("Creating ground blocks...")
+                voxel_origins_ground_relative_m_int = voxel_origins_ground_relative_m.astype(np.int32)
+                for mc_x, mc_z, mc_y in tqdm(voxel_origins_ground_relative_m_int, desc='Creating Ground'):
+                    set_ground_voxels.add((int(mc_x), int(mc_y), int(mc_z)))
+                    try:
+                        schem.setBlock((mc_x, mc_y,   mc_z), GROUND_BLOCK_TOP  )
+                        schem.setBlock((mc_x, mc_y-1, mc_z), GROUND_BLOCK_BELOW)
+                        schem.setBlock((mc_x, mc_y-2, mc_z), GROUND_BLOCK_BELOW)
+                        schem.setBlock((mc_x, mc_y-3, mc_z), GROUND_BLOCK_BELOW)
+                        schem.setBlock((mc_x, mc_y-4, mc_z), GROUND_BLOCK_BELOW)
+                        schem.setBlock((mc_x, mc_y-5, mc_z), GROUND_BLOCK_BELOW)
+                        schem.setBlock((mc_x, mc_y-6, mc_z), GROUND_BLOCK_BELOW)
+                        schem.setBlock((mc_x, mc_y-7, mc_z), GROUND_BLOCK_BELOW)
+                    except:
+                        pass
+                
+                # Filter lone ground block 
+                logger.info("Filtering lone ground blocks...")
+                nb_grass_block, nb_lone_grass_block = 0, 0
+                for x, y, z in tqdm(set_ground_voxels, desc='Filtering Lone Ground Blocks'):
+                    current_block_state = schem.getBlockDataAt((x,y,z))
+                    if current_block_state!=GROUND_BLOCK_TOP: continue
+                    nb_grass_block += 1
+                    block_state_north = schem.getBlockDataAt((x,   y, z-1))
+                    block_state_south = schem.getBlockDataAt((x,   y, z+1))
+                    block_state_east  = schem.getBlockDataAt((x+1, y, z  ))
+                    block_state_west  = schem.getBlockDataAt((x-1, y, z  ))
+                    # If no neighbors, remove current block and replace dirt block below by grass
+                    if (block_state_north=='minecraft:air' and 
+                        block_state_south=='minecraft:air' and 
+                        block_state_east =='minecraft:air' and 
+                        block_state_west =='minecraft:air'):
+                        nb_lone_grass_block += 1
+                        schem.setBlock((x, y,   z), 'minecraft:air')
+                        schem.setBlock((x, y-1, z), GROUND_BLOCK_TOP)
+                logger.info(f'Total grass block : {nb_grass_block}  |  Lone grass block removed : {nb_lone_grass_block}')
+
+            else:
+                logger.warning(f"Batch {batch_num} has no ground points.")
+
+
+        # --- 2. Process other points class ---
+        # For each voxel, what is the main class ?
+        # For each voxel, ignore the others points and get the main point class
+        # For some classes, check the 1/8 of the voxels to check for partial block placement
+
+        logger.info("Processing othher point classes")
+        point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
+
+        # Voxelize the points for each class
+        point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
+
+        for point_class in tqdm(point_classes_no_ground, desc='Voxelize points no ground'):
+            mask = batch_points.classification == point_class
+            batch_ground_points_no_ground = batch_points[mask]
+
+            x = batch_ground_points_no_ground.x
+            y = batch_ground_points_no_ground.y * -1                 # Flip Y
+            z = batch_ground_points_no_ground.z + z_axis_translate
+            xyz_no_ground = np.vstack([x, y, z]).T
+
+            points_relative_to_voxel_origin = xyz_no_ground - [voxel_origin_x_m, voxel_origin_y_m_flipped, 0]
+            
+            voxel_origins_relative_m = find_occupied_voxels_vectorized(
                 points_relative_to_voxel_origin,
                 voxel_size=VOXEL_SIDE,
-                min_points_per_voxel=1 # Use 1 for filled ground
+                min_points_per_voxel=0
             )
+            point_coordinates[point_class] = voxel_origins_relative_m
 
-            
 
-            # Add ground blocks (Grass & Dirt)
-            logger.info("Creating ground blocks...")
-            voxel_origins_ground_relative_m_int = voxel_origins_ground_relative_m.astype(np.int32)
-            for mc_x, mc_z, mc_y in tqdm(voxel_origins_ground_relative_m_int, desc='Creating Ground'):
-                set_ground_voxels.add((int(mc_x), int(mc_y), int(mc_z)))
+
+
+        # Count the number of point class per block
+        point_coordinates_count = dict()       # {(x1,y1,z1): {c1: n1}}
+        for point_class, point_class_coordinate in tqdm(point_coordinates.items(), total=len(point_coordinates), desc='Count Points'):
+            for mc_x, mc_y, mc_z in point_class_coordinate:
+                block_coordinate = (int(mc_x), int(mc_y), int(mc_z))
+                if block_coordinate not in point_coordinates_count:
+                    point_coordinates_count[block_coordinate] = dict()
+                if point_class not in point_coordinates_count[block_coordinate]:
+                    point_coordinates_count[block_coordinate][point_class] = 0
+                point_coordinates_count[block_coordinate][point_class] += 1
+
+
+        # For each voxel, what point class is dominant
+        dominant_class_coordinate = dict()      # {(x1, y1, z1): point_class}
+        for coordinate, dict_class_count in tqdm(point_coordinates_count.items(), total=len(point_coordinates_count), desc='Dominant Class'):
+            dominant_class = max(dict_class_count, key=dict_class_count.get)
+            dominant_class_coordinate[coordinate] = dominant_class
+
+
+        # for each class, for each coordinate, get the 8 sub block coordinate 
+        # --- Filter coordinates based on dominant class ---
+        # We want to know, for each class, which voxels it dominates.
+        # This filters the original point_coordinates list.
+
+        dominant_voxels_by_class = defaultdict(list) # {point_class: [(x,y,z), ...]}
+
+        logger.info("Filtering coordinates to keep only those within their dominant class voxel...")
+        # Iterate through the voxels where we know the dominant class
+        for coordinate, dominant_class in tqdm(dominant_class_coordinate.items(), desc="Filtering Dominant Voxels"):
+            # Check if this coordinate was originally associated with this dominant_class
+            # This check is somewhat redundant given how dominant_class_coordinate was built,
+            # but ensures correctness if the logic changes. More importantly, it structures
+            # the data correctly for the next step.
+            # We retrieve the list of coordinates originally found for this dominant_class
+            original_coords_for_class = point_coordinates.get(dominant_class, [])
+            # Although coordinate *must* be in original_coords_for_class by definition
+            # of dominant_class_coordinate, we add it to our result structure.
+            # This loop effectively reorganizes dominant_class_coordinate into a
+            # class-keyed dictionary.
+            if coordinate in original_coords_for_class: # This check might be redundant but confirms logic
+                 dominant_voxels_by_class[dominant_class].append(coordinate)
+            # A potentially faster way if point_coordinates is large and dominant_class_coordinate is the primary source:
+            # dominant_voxels_by_class[dominant_class].append(coordinate) # Directly append based on dominance
+
+        # Log counts for verification
+        for pc, coords in dominant_voxels_by_class.items():
+            logger.debug(f"Class {pc} is dominant in {len(coords)} voxels.")
+
+
+        # --- Place blocks based on dominant class ---
+        logger.info("Placing blocks for non-ground features based on dominant class...")
+        placed_non_ground_count = 0
+        skipped_due_to_ground_count = 0
+        skipped_due_to_other_count = 0
+
+        # Iterate through each class that dominated at least one voxel
+        for point_class, list_of_coordinates in tqdm(dominant_voxels_by_class.items(), desc="Placing Dominant Blocks"):
+            # Get the corresponding Minecraft block name from the configuration
+            # Use .get() for safety, provide a default (e.g., stone), and take the first element if it's a list
+            block_name_list = choosen_template_point_classes.get(point_class, ["minecraft:stone"])
+            block_name = block_name_list[0] if block_name_list else "minecraft:stone" # Ensure we have a block name
+
+            # Iterate through the coordinates where this class is dominant
+            for mc_x, mc_y, mc_z in list_of_coordinates:
+                # Ensure coordinates are integers
+                mc_x, mc_y, mc_z = int(mc_x), int(mc_y), int(mc_z)
+                coord_tuple = (mc_x, mc_y, mc_z)
+
+                # --- CRITICAL CHECK: Avoid overwriting ground ---
+                # Check if this voxel coordinate was part of the generated ground surface
+                # Need access to the ground voxels generated earlier. Assuming 'set_ground_voxels' exists and holds relative coords.
+                # We also need to check blocks *below* the surface voxel, as ground has thickness.
+                is_ground_or_below = False
+                if DO_GROUND: # Only check if ground processing was enabled
+                    for i in range(GROUND_THICKNESS): # Check the voxel and those below it
+                        if (mc_x, mc_y - i, mc_z) in set_ground_voxels:
+                            is_ground_or_below = True
+                            break
+
+                if is_ground_or_below:
+                    skipped_due_to_ground_count += 1
+                    # logger.debug(f"Skipping block at {coord_tuple} for class {point_class}: Voxel is part of ground layer.")
+                    continue # Skip placing this block
+
+                # --- Check if block is already occupied by another non-ground feature ---
+                # This prevents features from lower-priority classes (processed later if dict order matters)
+                # or potentially from the same class if coordinates somehow overlap (unlikely here)
+                # from overwriting existing placements.
+                current_block_in_schem = schem.getBlockDataAt(coord_tuple)
+                if current_block_in_schem != 'minecraft:air':
+                    skipped_due_to_other_count +=1
+                    # logger.debug(f"Skipping block at {coord_tuple} for class {point_class}: Voxel already occupied by {current_block_in_schem}.")
+                    continue # Skip placing this block
+
+
+                # --- Place the block ---
                 try:
-                    schem.setBlock((mc_x, mc_y,   mc_z), GROUND_BLOCK_TOP  )
-                    schem.setBlock((mc_x, mc_y-1, mc_z), GROUND_BLOCK_BELOW)
-                    schem.setBlock((mc_x, mc_y-2, mc_z), GROUND_BLOCK_BELOW)
-                    schem.setBlock((mc_x, mc_y-3, mc_z), GROUND_BLOCK_BELOW)
-                    schem.setBlock((mc_x, mc_y-4, mc_z), GROUND_BLOCK_BELOW)
-                    schem.setBlock((mc_x, mc_y-5, mc_z), GROUND_BLOCK_BELOW)
-                    schem.setBlock((mc_x, mc_y-6, mc_z), GROUND_BLOCK_BELOW)
-                    schem.setBlock((mc_x, mc_y-7, mc_z), GROUND_BLOCK_BELOW)
-                except:
-                    pass
-            
-            # Filter lone ground block 
-            logger.info("Filtering lone ground blocks...")
-            nb_grass_block, nb_lone_grass_block = 0, 0
-            for x, y, z in tqdm(set_ground_voxels, desc='Filtering Lone Ground Blocks'):
-                current_block_state = schem.getBlockDataAt((x,y,z))
-                if current_block_state!=GROUND_BLOCK_TOP: continue
-                nb_grass_block += 1
-                block_state_north = schem.getBlockDataAt((x,   y, z-1))
-                block_state_south = schem.getBlockDataAt((x,   y, z+1))
-                block_state_east  = schem.getBlockDataAt((x+1, y, z  ))
-                block_state_west  = schem.getBlockDataAt((x-1, y, z  ))
-                # If no neighbors, remove current block and replace dirt block below by grass
-                if (block_state_north=='minecraft:air' and 
-                    block_state_south=='minecraft:air' and 
-                    block_state_east =='minecraft:air' and 
-                    block_state_west =='minecraft:air'):
-                    nb_lone_grass_block += 1
-                    schem.setBlock((x, y,   z), 'minecraft:air')
-                    schem.setBlock((x, y-1, z), GROUND_BLOCK_TOP)
-            logger.info(f'Total grass block : {nb_grass_block}  |  Lone grass block removed : {nb_lone_grass_block}')
+                    # Check Minecraft height limits BEFORE placing
+                    if LOWEST_MINECRAFT_POINT <= mc_y <= HIGHEST_MINECRAFT_POINT:
+                        schem.setBlock(coord_tuple, block_name)
+                        placed_non_ground_count += 1
+                    else:
+                        # Optional: Log blocks outside height limits
+                        # logger.warning(f"Skipping block at {coord_tuple} for class {point_class}: Y coordinate {mc_y} outside Minecraft limits [{LOWEST_MINECRAFT_POINT}, {HIGHEST_MINECRAFT_POINT}].")
+                        pass # Silently skip if outside limits
 
-        else:
-            logger.warning(f"Batch {batch_num} has no ground points.")
+                except Exception as e:
+                     # Log error if block placement fails for other reasons
+                     logger.warning(f"Failed to set block {block_name} at {coord_tuple} for class {point_class}: {e}")
 
 
 
+
+
+
+        # --- Save schematic ---
         schematic_filename = f"b_{batch_num}_of_{total_batches}~x_{batch_origin_mc_x}~z_{batch_origin_mc_z}"
         schematic_rel_path = f"{las_name_schem}/{schematic_filename}.schem" # Relative path for commands
 
