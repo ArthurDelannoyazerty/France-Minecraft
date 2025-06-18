@@ -6,5 +6,7 @@ data/mcfunctions
 data/raw_point_cloud
 data/myschems
 data/litemapy
+data/cache
+data/mnt
 
 **.pyc

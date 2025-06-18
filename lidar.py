@@ -53,13 +53,17 @@ def geodataframe_from_ign_to_leaflet(gdf:gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf_transformed
 
 
-def download_ign_available_tiles(output_filepath:str, force_download:bool=False):
+def download_ign_available_tiles(output_filepath:str, data_type:str, force_download:bool=False):
     # If file already exists and no force, then do not download file
     if os.path.isfile(output_filepath) and not force_download:
         logger.info(f"File {output_filepath} already exists. Skipping download.")
         return
 
-    wfs_url = "https://data.geopf.fr/private/wfs/?service=WFS&version=2.0.0&apikey=interface_catalogue&request=GetFeature&typeNames=IGNF_LIDAR-HD_TA:nuage-dalle&outputFormat=application/json"
+    if data_type=='point_cloud':
+        wfs_url = "https://data.geopf.fr/private/wfs/?service=WFS&version=2.0.0&apikey=interface_catalogue&request=GetFeature&typeNames=IGNF_LIDAR-HD_TA:nuage-dalle&outputFormat=application/json"
+    elif data_type=='mnt':
+        wfs_url = "https://data.geopf.fr/private/wfs/?service=WFS&version=2.0.0&apikey=interface_catalogue&request=GetFeature&typeNames=IGNF_LIDAR-HD_TA:mnt-dalle&outputFormat=application/json"
+
 
     # First request to initialize the geojson and know the total number of features
     logger.info('First download for all features available')
@@ -126,6 +130,9 @@ def download_ign_available_tiles(output_filepath:str, force_download:bool=False)
     with open(output_filepath, 'w', encoding='utf-8') as f:
         json.dump(geojson, f, indent=4, ensure_ascii=False)
     logger.info(f"Saved all available tiles metadata to {output_filepath}")
+
+
+
 
 
 def merge_all_geojson_features(geojson_filepath:str, merged_geojson_filepath:str, force:bool=False):
@@ -377,15 +384,24 @@ if __name__=='__main__':
     # Download and file paths
     FORCE_DOWNLOAD_ALL_TILES_AVAILABLE = False
     filepath_all_tiles_geojson = Path('data/data_grille/all_tiles_available.geojson')
+    filepath_all_tiles_mnt_geojson = Path('data/data_grille/all_tiles_available_mnt.geojson')
+
     laz_folderpath = Path('data/raw_point_cloud')
     # tile_filename = 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'
     tile_filename = 'LHD_FXX_0440_6718_PTS_C_LAMB93_IGN69.copc.laz'
     tile_filepath = laz_folderpath / tile_filename
     las_name_base = tile_filepath.stem 
-    
+
+
+    mnt_folderpath = Path('data/mnt')
+    mnt_filename = 'LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif'
+    mnt_filepath = mnt_folderpath / mnt_filename
+    mnt_name_base = mnt_filepath.stem
+
+
     # Minecraft parameters
-    LOWEST_MINECRAFT_POINT = -60
-    HIGHEST_MINECRAFT_POINT = 319
+    LOWEST_MINECRAFT_POINT = -2031          # If normal minecraft : -60
+    HIGHEST_MINECRAFT_POINT = 2025          # If normal minecraft : 319
     GROUND_CLASS = 2
     GROUND_BLOCK_TOP = "minecraft:grass_block"
     GROUND_BLOCK_BELOW = "minecraft:dirt"
@@ -430,8 +446,35 @@ if __name__=='__main__':
 
 
     # -------------------------- Optional: Download step ------------------------- #
-    download_ign_available_tiles(filepath_all_tiles_geojson, FORCE_DOWNLOAD_ALL_TILES_AVAILABLE)
+    download_ign_available_tiles(filepath_all_tiles_geojson, 'point_cloud', FORCE_DOWNLOAD_ALL_TILES_AVAILABLE)
+    download_ign_available_tiles(filepath_all_tiles_mnt_geojson, 'mnt', FORCE_DOWNLOAD_ALL_TILES_AVAILABLE)
     # download_available_tile(filepath_all_tiles_geojson, laz_folderpath)
+
+    # --------------------------------- Load MNT --------------------------------- #
+    logger.info(f"Loading mnt file: {mnt_filepath}")
+    try:
+        import rasterio
+        mnt = rasterio.open(mnt_filepath)
+        logger.info(f"Loaded mnt.")
+    except Exception as e:
+        logger.error(f"Failed to load MNT file: {e}")
+        exit(1)
+
+    mnt_array:np.ndarray = mnt.read(1)
+    real_min_mnt = mnt_array[mnt_array!=-9999.0].min()
+    mnt_array[mnt_array==-9999.0] = real_min_mnt
+    mnt_array = mnt_array.astype(np.uint32)          # round the values, uint16 ok but strange errors in mcschematic so uint32 instead
+
+    mnt_array = mnt_array[:300, :300]
+
+    schem = mcschematic.MCSchematic()
+
+    for mc_x in range(mnt_array.shape[0]):
+        for mc_z in range(mnt_array.shape[1]):
+            schem.setBlock((mc_x, mnt_array[mc_x, mc_z],  mc_z), GROUND_BLOCK_TOP)
+    schem.save(str(Path('data/myschems')), 'test_mnt', mcschematic.Version.JE_1_21)
+    exit(0)
+
 
     # ------------------------------ Load Lidar Data ----------------------------- #
     logger.info(f"Loading lidar file: {tile_filepath}")
@@ -727,7 +770,7 @@ if __name__=='__main__':
         schematic_filename = f"b_{batch_num}_of_{total_batches}~x_{batch_origin_mc_x}~z_{batch_origin_mc_z}"
         schematic_rel_path = f"{las_name_schem}/{schematic_filename}.schem" # Relative path for commands
 
-        schem.save(str(folder_save_myschem), schematic_filename, mcschematic.Version.JE_1_21_1)
+        schem.save(str(folder_save_myschem), schematic_filename, mcschematic.Version.JE_1_21)
         logger.info(f"Saved schematic: {folder_save_myschem / (schematic_filename + '.schem')}")
 
         # --- Add Commands to MCFunction ---
