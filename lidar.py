@@ -8,6 +8,7 @@ import numpy as np
 import pyvista as pv
 import geopandas as gpd
 import mcschematic
+import pyproj
 
 from scipy.interpolate import LinearNDInterpolator
 # NEW: Import warnings to suppress potential division-by-zero in IDW if needed
@@ -15,13 +16,13 @@ import warnings
 from collections import defaultdict
 
 
-from shapely.geometry import mapping, Polygon # Added Polygon
+from shapely.geometry import mapping, Polygon
 from shapely.ops import unary_union
 from shapely.vectorized import contains
 from pathlib import Path
 from utils.logger import setup_logging
 from script import find_occupied_voxels_vectorized
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 
 logger = logging.getLogger(__name__)
@@ -382,21 +383,25 @@ if __name__=='__main__':
     #                                 Configuration                                #
     # ---------------------------------------------------------------------------- #
     # Download and file paths
-    FORCE_DOWNLOAD_ALL_TILES_AVAILABLE = False
-    filepath_all_tiles_geojson = Path('data/data_grille/all_tiles_available.geojson')
-    filepath_all_tiles_mnt_geojson = Path('data/data_grille/all_tiles_available_mnt.geojson')
+    FORCE_DOWNLOAD_LIDAR_CATALOG = False
+    lidar_tiles_available_filepath = Path('data/grid/lidar_public_tiles_available.geojson')
+    mnt_tiles_available_filepath   = Path('data/grid/mnt_public_tiles_available.geojson')
 
-    laz_folderpath = Path('data/raw_point_cloud')
+    zone_geojson_filepath = Path('data/zone_test.geojson')
+
+    lidar_folderpath = Path('data/tiles/lidar/')
     # tile_filename = 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'
     tile_filename = 'LHD_FXX_0440_6718_PTS_C_LAMB93_IGN69.copc.laz'
-    tile_filepath = laz_folderpath / tile_filename
+    tile_filepath = lidar_folderpath / tile_filename
     las_name_base = tile_filepath.stem 
 
 
-    mnt_folderpath = Path('data/mnt')
+    mnt_folderpath = Path('data/tiles/mnt')
     mnt_filename = 'LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif'
     mnt_filepath = mnt_folderpath / mnt_filename
     mnt_name_base = mnt_filepath.stem
+
+    SEARCH_FOR_TILE_IN_ZONE = False
 
 
     # Minecraft parameters
@@ -446,9 +451,106 @@ if __name__=='__main__':
 
 
     # -------------------------- Optional: Download step ------------------------- #
-    download_ign_available_tiles(filepath_all_tiles_geojson, 'point_cloud', FORCE_DOWNLOAD_ALL_TILES_AVAILABLE)
-    download_ign_available_tiles(filepath_all_tiles_mnt_geojson, 'mnt', FORCE_DOWNLOAD_ALL_TILES_AVAILABLE)
+    download_ign_available_tiles(lidar_tiles_available_filepath, 'point_cloud', FORCE_DOWNLOAD_LIDAR_CATALOG)
+    download_ign_available_tiles(mnt_tiles_available_filepath,   'mnt',         FORCE_DOWNLOAD_LIDAR_CATALOG)
     # download_available_tile(filepath_all_tiles_geojson, laz_folderpath)
+
+    # ----------------------------- load zone geojson ---------------------------- #
+    
+    zone_geojson = json.loads(zone_geojson_filepath.read_text())
+    zone_coords = zone_geojson['features'][0]['geometry']['coordinates'][0]
+    zone_shape_wgs84 = Polygon(zone_coords)
+
+    from shapely.ops import transform
+    
+    wgs84 = pyproj.CRS('EPSG:4326')
+    lambert93 = pyproj.CRS('EPSG:2154')
+
+    project = pyproj.Transformer.from_crs(wgs84, lambert93, always_xy=True).transform
+    zone_shape_lambert93 = transform(project, zone_shape_wgs84)
+
+    # ----------- Scan MNT and cloud points catalog for compatible zone ---------- #
+
+    lidar_tiles_catalog = json.loads(lidar_tiles_available_filepath.read_text())
+    mnt_tiles_catalog   = json.loads(mnt_tiles_available_filepath.read_text())    
+
+    if SEARCH_FOR_TILE_IN_ZONE:
+        logger.info('Filtering the lidar tiles for the selected zone...')
+        lidar_intersecting_feature = []
+        for feature in tqdm(lidar_tiles_catalog['features'], desc='Filtering lidar tiles'):
+            feature_shape = Polygon(feature['geometry']['coordinates'][0])
+            if feature_shape.intersects(zone_shape_lambert93):
+                lidar_intersecting_feature.append(feature)
+        logger.info(f'Lidar tile filtering done. Found : {len(lidar_intersecting_feature)}')
+
+        logger.info('Filtering the mnt tiles for the selected zone...')
+        mnt_intersecting_feature = []
+        for feature in tqdm(mnt_tiles_catalog['features'], desc='Filtering mnt tiles'):
+            feature_shape = Polygon(feature['geometry']['coordinates'][0])
+            if feature_shape.intersects(zone_shape_lambert93):
+                mnt_intersecting_feature.append(feature)
+        logger.info(f'MNT tile filtering done. Found : {len(mnt_intersecting_feature)}')
+
+    else:
+        logger.info('Using test tiles')
+        lidar_test_feature = {
+            'type': 'Feature', 
+            'id': 'nuage-dalle.278426', 
+            'geometry': {'type': 'Polygon', 'coordinates': [...]}, 
+            'geometry_name': 'geom', 
+            'properties': {
+                'fid': 278426, 
+                'name': 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz', 
+                'url': 'https://storage.sbg.cloud.ovh.net/v1/AUTH_63234f509d6048bca3c9fd7928720ca1/ppk-lidar/RQ/LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'
+            }, 
+            'bbox': [1016000, 6292000, 1017000, 6293000]
+        }
+        lidar_intersecting_feature = [lidar_test_feature]
+
+        mnt_test_feature = {
+            'type': 'Feature', 
+            'id': 'mnt-dalle.168575', 
+            'geometry': {'type': 'Polygon', 'coordinates': [...]}, 
+            'geometry_name': 'geom', 
+            'properties': {
+                'fid': 168575, 
+                'name': 'LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif', 
+                'url': 'https://data.geopf.fr/wms-r/LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif?SERVICE=WMS&VERSION=1.3.0&EXCEPTIONS=text/xml&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&FORMAT=image/geotiff&STYLES=&CRS=EPSG:2154&BBOX=1015999.75,6292000.25,1016999.75,6293000.25&WIDTH=2000&HEIGHT=2000&FILENAME=LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif', 
+                'srs': 2154
+            }, 
+            'bbox': [1016000, 6292000, 1017000, 6293000]
+        }
+        mnt_intersecting_feature = [mnt_test_feature]
+
+
+    # ----------------------- Download the tiles if needed ----------------------- #
+
+    def stream_download(url:str, output_filepath:Path, desc:str='Item Download'):
+        response = requests.get(url, stream=True)
+        total = int(response.headers.get('content-length', 0))
+        with open(output_filepath, 'wb') as f, tqdm(desc=desc,total=total,unit='iB',unit_scale=True,unit_divisor=1024,) as bar:
+            for data in response.iter_content(chunk_size=1024):
+                size = f.write(data)
+                bar.update(size)
+
+    for lidar_feature in tqdm(lidar_intersecting_feature, desc='Downloading lidar tiles'):
+        tile_filename:str = lidar_feature['properties']['name']
+        tile_url:str = lidar_feature['properties']['url']
+        tile_filepath = lidar_folderpath / tile_filename
+        if not tile_filepath.exists():
+            stream_download(tile_url, tile_filepath)
+
+    for mnt_feature in tqdm(mnt_intersecting_feature, desc='Downloading mnt tiles'):
+        tile_filename:str = mnt_feature['properties']['name']
+        tile_url:str = lidar_feature['properties']['url']
+        tile_filepath = mnt_folderpath / tile_filename
+        if not tile_filepath.exists():
+            stream_download(tile_url, tile_filepath)
+    
+
+
+
+
 
     # --------------------------------- Load MNT --------------------------------- #
     logger.info(f"Loading mnt file: {mnt_filepath}")
@@ -672,7 +774,6 @@ if __name__=='__main__':
                 if current_block_state=='minecraft:air':
                     schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
 
-                    
         def do_Small_Vegetation(coordinates):
             bloc_type = choosen_template_point_classes[3]
             for x,y,z in coordinates:
@@ -685,7 +786,6 @@ if __name__=='__main__':
                         z += 1
                 schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
         
-        
         def do_Medium_Vegetation(coordinates):
             bloc_type = choosen_template_point_classes[4]
             for x,y,z in coordinates:
@@ -693,14 +793,12 @@ if __name__=='__main__':
                 if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
                     schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
         
-        
         def do_High_Vegetation(coordinates):
             bloc_type = choosen_template_point_classes[5]
             for x,y,z in coordinates:
                 current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
                 if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
                     schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-        
         
         def do_Building(coordinates):
             bloc_type = choosen_template_point_classes[6]
