@@ -1,3 +1,4 @@
+import rasterio
 import laspy
 import wget
 import logging
@@ -23,6 +24,7 @@ from pathlib import Path
 from utils.logger import setup_logging
 from script import find_occupied_voxels_vectorized
 from tqdm.auto import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 
 logger = logging.getLogger(__name__)
@@ -390,16 +392,9 @@ if __name__=='__main__':
     zone_geojson_filepath = Path('data/zone_test.geojson')
 
     lidar_folderpath = Path('data/tiles/lidar/')
-    # tile_filename = 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'
-    tile_filename = 'LHD_FXX_0440_6718_PTS_C_LAMB93_IGN69.copc.laz'
-    tile_filepath = lidar_folderpath / tile_filename
-    las_name_base = tile_filepath.stem 
-
-
     mnt_folderpath = Path('data/tiles/mnt')
-    mnt_filename = 'LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif'
-    mnt_filepath = mnt_folderpath / mnt_filename
-    mnt_name_base = mnt_filepath.stem
+    schematic_folderpath = Path('data/myschems')
+    mcfunction_folderpath = Path('data/mcfunctions')
 
     SEARCH_FOR_TILE_IN_ZONE = False
 
@@ -416,7 +411,7 @@ if __name__=='__main__':
     PERCENTAGE_TO_REMOVE_NON_GROUND = 0     # Decimation for non-ground features
     VOXEL_SIDE = 0.5
     MIN_POINTS_PER_VOXEL_NON_GROUND = 3     # Filtering for non-ground features
-    BATCH_PER_PRODUCT_SIDE = 3              # Split 1 tile into BATCH_PER_PRODUCT_SIDE*BATCH_PER_PRODUCT_SIDE batches
+    BATCH_PER_PRODUCT_SIDE = 4              # Must be divisible by 2. Split 1 tile into BATCH_PER_PRODUCT_SIDE * BATCH_PER_PRODUCT_SIDE batches
 
     # Ground filling parameters
     INTERPOLATION_GRID_CELL_SIZE = 1.0      # Grid resolution for point cloud interpolation
@@ -453,10 +448,8 @@ if __name__=='__main__':
     # -------------------------- Optional: Download step ------------------------- #
     download_ign_available_tiles(lidar_tiles_available_filepath, 'point_cloud', FORCE_DOWNLOAD_LIDAR_CATALOG)
     download_ign_available_tiles(mnt_tiles_available_filepath,   'mnt',         FORCE_DOWNLOAD_LIDAR_CATALOG)
-    # download_available_tile(filepath_all_tiles_geojson, laz_folderpath)
 
     # ----------------------------- load zone geojson ---------------------------- #
-    
     zone_geojson = json.loads(zone_geojson_filepath.read_text())
     zone_coords = zone_geojson['features'][0]['geometry']['coordinates'][0]
     zone_shape_wgs84 = Polygon(zone_coords)
@@ -535,87 +528,132 @@ if __name__=='__main__':
 
     for lidar_feature in tqdm(lidar_intersecting_feature, desc='Downloading lidar tiles'):
         tile_filename:str = lidar_feature['properties']['name']
-        tile_url:str = lidar_feature['properties']['url']
+        tile_url:str      = lidar_feature['properties']['url']
         tile_filepath = lidar_folderpath / tile_filename
         if not tile_filepath.exists():
             stream_download(tile_url, tile_filepath)
 
     for mnt_feature in tqdm(mnt_intersecting_feature, desc='Downloading mnt tiles'):
         tile_filename:str = mnt_feature['properties']['name']
-        tile_url:str = lidar_feature['properties']['url']
+        tile_url:str      = mnt_feature['properties']['url']
         tile_filepath = mnt_folderpath / tile_filename
         if not tile_filepath.exists():
             stream_download(tile_url, tile_filepath)
     
 
+    
+
+
+    # --------------------- Create compatible mnt-lidar tiles -------------------- #
+
+    # We assume lidar and MNT have the same bbox 
+    tiles = {}
+    for lidar_feature in lidar_intersecting_feature:
+        lidar_bbox_str  = '-'.join(map(str, lidar_feature['bbox']))
+        if lidar_bbox_str not in tiles:
+            tiles[lidar_bbox_str] = {}
+        tiles[lidar_bbox_str]['lidar'] = {
+            'filepath': lidar_folderpath / lidar_feature['properties']['name'],
+            'bbox': lidar_feature['bbox']
+        }
+
+    for mnt_feature in mnt_intersecting_feature:    
+        mnt_bbox_str = '-'.join(map(str, mnt_feature['bbox']))
+        if mnt_bbox_str not in tiles:
+            tiles[mnt_bbox_str] = {}
+        tiles[mnt_bbox_str]['mnt'] = {
+            'filepath': mnt_folderpath / mnt_feature['properties']['name'],
+            'bbox': mnt_feature['bbox']
+        }
+
+    
+    # ---------------------------------------------------------------------------- #
+    #                           Loop for each tile found                           #
+    # ---------------------------------------------------------------------------- #
+
+    for tile_bbox, tile_data in tiles.items():
+        logger.info(f"Processing tile with bbox: {tile_bbox}")
+
+        # Check if both lidar and mnt are available for this tile
+        if 'lidar' not in tile_data or 'mnt' not in tile_data:
+            logger.warning(f"Skipping tile {tile_bbox} as it does not have both lidar and mnt data.")
+            continue
+
+        lidar_tile_filepath = Path(tile_data['lidar']['filepath'])
+        mnt_tile_filepath   = Path(tile_data['mnt']['filepath'])
+
+        # --------------------------------- Load MNT --------------------------------- #
+        logger.info(f"Loading MNT file: {mnt_tile_filepath} ...")
+        mnt = rasterio.open(mnt_tile_filepath)
+        logger.info(f"MNT loaded")
+
+        # --------------------------------- clean MNT -------------------------------- #
+        logger.info(f"Cleaning MNT data...")
+        mnt_array:np.ndarray = mnt.read(1)
+        mnt_array[0] = mnt_array[1]                     # Replace first row with second row (to avoid NaN/-9999.0 issues)      
+        lowest_coordinate = mnt_array.min()
+        
+        # Pooling the MNT array to transform a mnt resolution of 0.5m to 1m
+        M, N = mnt_array.shape
+        K, L = 2, 2
+        MK, NL = M//K, N//L
+        pooled_mnt_array:np.ndarray = mnt_array.reshape(MK, K, NL, L).mean(axis=(1, 3))  # Average pooling
+        mnt_array = pooled_mnt_array.astype(np.uint32)          # round the values, uint16 ok but strange errors in mcschematic so uint32 instead
+
+        logger.info(f"MNT data cleaned")
+
+        # ------------------------------ Load Lidar Data ----------------------------- #
+        logger.info(f"Loading lidar file: {lidar_tile_filepath} ...")
+        lidar = laspy.read(lidar_tile_filepath)
+        logger.info(f"Lidar loaded | containing {len(lidar.points)} points.")
+
+
+        # ------------------------- Calculate Global Z Offset ------------------------ #
+        z_axis_translate = LOWEST_MINECRAFT_POINT - lowest_coordinate
+        logger.info(f"Calculated Z translation: {z_axis_translate:.2f} (Real min Z: {lowest_coordinate:.2f} -> MC Y: {LOWEST_MINECRAFT_POINT})")
+
+        # ----------------------------- Batch Calculation ---------------------------- #
+        tile_edge_size = mnt_array.shape[0] 
+        batch_size = tile_edge_size // BATCH_PER_PRODUCT_SIDE
+
+        tile_x_origin, tile_y_origin = tile_data['mnt']['bbox'][0], tile_data['mnt']['bbox'][1]
+
+        with logging_redirect_tqdm():
+            for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis'):
+                for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis'):
+
+                    schem = mcschematic.MCSchematic()
+
+                    # ------------------------ Calculate batch coordinates ----------------------- #
+                    xmin_relative = batch_size * batch_x
+                    xmax_relative = batch_size * (batch_x + 1)
+                    ymin_relative = batch_size * batch_y
+                    ymax_relative = batch_size * (batch_y + 1)                    
+
+                    xmin_absolute = tile_x_origin + xmin_relative
+                    xmax_absolute = tile_x_origin + xmax_relative
+                    ymin_absolute = tile_y_origin + ymin_relative
+                    ymax_absolute = tile_y_origin + ymax_relative
+
+                    logger.info(f"Batch ({batch_x}, {batch_y}) - Coordinates: ({xmin_absolute}, {ymin_absolute}) - ({xmax_absolute}, {ymax_absolute})")
+                    
+                    # ------------------------------ MNT batch data ------------------------------ #
+                    mnt_batch_array = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
+                    logger.info(f"Batch ({batch_x}, {batch_y}) - MNT shape: {mnt_batch_array.shape}")
+
+
+                    # ------------------------ Write MNT data to schematic ----------------------- #
+                    for mc_x in range(mnt_batch_array.shape[0]):
+                        for mc_z in range(mnt_batch_array.shape[1]):
+                            schem.setBlock((mc_x, mnt_batch_array[mc_x, mc_z],  mc_z), GROUND_BLOCK_TOP)
 
 
 
 
-    # --------------------------------- Load MNT --------------------------------- #
-    logger.info(f"Loading mnt file: {mnt_filepath}")
-    try:
-        import rasterio
-        mnt = rasterio.open(mnt_filepath)
-        logger.info(f"Loaded mnt.")
-    except Exception as e:
-        logger.error(f"Failed to load MNT file: {e}")
-        exit(1)
-
-    mnt_array:np.ndarray = mnt.read(1)
-    real_min_mnt = mnt_array[mnt_array!=-9999.0].min()
-    mnt_array[mnt_array==-9999.0] = real_min_mnt
-    mnt_array = mnt_array.astype(np.uint32)          # round the values, uint16 ok but strange errors in mcschematic so uint32 instead
-
-    mnt_array = mnt_array[:300, :300]
-
-    schem = mcschematic.MCSchematic()
-
-    for mc_x in range(mnt_array.shape[0]):
-        for mc_z in range(mnt_array.shape[1]):
-            schem.setBlock((mc_x, mnt_array[mc_x, mc_z],  mc_z), GROUND_BLOCK_TOP)
     schem.save(str(Path('data/myschems')), 'test_mnt', mcschematic.Version.JE_1_21)
-    exit(0)
 
 
-    # ------------------------------ Load Lidar Data ----------------------------- #
-    logger.info(f"Loading lidar file: {tile_filepath}")
-    try:
-        las = laspy.read(tile_filepath)
-        logger.info(f"Loaded {len(las.points)} points.")
-    except Exception as e:
-        logger.error(f"Failed to load LAS/LAZ file: {e}")
-        exit(1)
 
-    # ------------------------- Calculate Global Z Offset ------------------------ #
-    lowest_coordinate = las.z.min() # Use overall min if no ground points
-    z_axis_translate = LOWEST_MINECRAFT_POINT - lowest_coordinate
-    logger.info(f"Calculated Z translation: {z_axis_translate:.2f} (Real min Z: {lowest_coordinate:.2f} -> MC Y: {LOWEST_MINECRAFT_POINT})")
-
-
-    # -------------------------- Batch Processing Setup -------------------------- #
-    las_name_schem = las_name_base.split('.')[0]
-    folder_save_myschem = Path(f"data/myschems/") / las_name_schem
-    folder_save_myschem.mkdir(parents=True, exist_ok=True)
-
-    # Calculate batch boundaries
-    las_x_min, las_x_max = round(las.x.min()), round(las.x.max())
-    las_y_min, las_y_max = round(las.y.min()), round(las.y.max())
-    las_x_len = las_x_max - las_x_min
-    las_y_len = las_y_max - las_y_min # Should be similar if square tile
-    batch_x_len = las_x_len / BATCH_PER_PRODUCT_SIDE
-    batch_y_len = las_y_len / BATCH_PER_PRODUCT_SIDE # Use Y length for Y batches
-
-    batch_limit_list = [
-        (
-            las_x_min +      j  * batch_x_len, # xmin
-            las_y_min +      i  * batch_y_len, # ymin
-            las_x_min + (1 + j) * batch_x_len, # xmax
-            las_y_min + (1 + i) * batch_y_len  # ymax
-        )
-        for i in range(BATCH_PER_PRODUCT_SIDE) # Rows (Y)
-        for j in range(BATCH_PER_PRODUCT_SIDE) # Columns (X)
-    ]
 
     # ---------------------------- Generate MCFunction --------------------------- #
     mcfunction_folderpath = Path('data/mcfunctions')
