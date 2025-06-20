@@ -391,16 +391,16 @@ if __name__=='__main__':
 
     zone_geojson_filepath = Path('data/zone_test.geojson')
 
-    lidar_folderpath = Path('data/tiles/lidar/')
-    mnt_folderpath = Path('data/tiles/mnt')
-    schematic_folderpath = Path('data/myschems')
+    lidar_folderpath      = Path('data/tiles/lidar/')
+    mnt_folderpath        = Path('data/tiles/mnt')
+    schematic_folderpath  = Path('data/myschems')
     mcfunction_folderpath = Path('data/mcfunctions')
 
     SEARCH_FOR_TILE_IN_ZONE = False
 
 
     # Minecraft parameters
-    LOWEST_MINECRAFT_POINT = -2031          # If normal minecraft : -60
+    LOWEST_MINECRAFT_POINT = 0  #2031          # If normal minecraft : -60
     HIGHEST_MINECRAFT_POINT = 2025          # If normal minecraft : 319
     GROUND_CLASS = 2
     GROUND_BLOCK_TOP = "minecraft:grass_block"
@@ -443,7 +443,7 @@ if __name__=='__main__':
         66: ["minecraft:diorite"],
         67: ["minecraft:basalt"],
     }
-
+    
 
     # -------------------------- Optional: Download step ------------------------- #
     download_ign_available_tiles(lidar_tiles_available_filepath, 'point_cloud', FORCE_DOWNLOAD_LIDAR_CATALOG)
@@ -591,15 +591,16 @@ if __name__=='__main__':
         logger.info(f"Cleaning MNT data...")
         mnt_array:np.ndarray = mnt.read(1)
         mnt_array[0] = mnt_array[1]                     # Replace first row with second row (to avoid NaN/-9999.0 issues)      
-        lowest_coordinate = mnt_array.min()
+        
         
         # Pooling the MNT array to transform a mnt resolution of 0.5m to 1m
         M, N = mnt_array.shape
         K, L = 2, 2
         MK, NL = M//K, N//L
         pooled_mnt_array:np.ndarray = mnt_array.reshape(MK, K, NL, L).mean(axis=(1, 3))  # Average pooling
-        mnt_array = pooled_mnt_array.astype(np.uint32)          # round the values, uint16 ok but strange errors in mcschematic so uint32 instead
-
+        mnt_array = pooled_mnt_array.astype(np.int32)          # round the values, int16 ok but strange errors in mcschematic so int32 instead
+        lowest_coordinate = mnt_array.min()
+        
         logger.info(f"MNT data cleaned")
 
         # ------------------------------ Load Lidar Data ----------------------------- #
@@ -611,6 +612,17 @@ if __name__=='__main__':
         # ------------------------- Calculate Global Z Offset ------------------------ #
         z_axis_translate = LOWEST_MINECRAFT_POINT - lowest_coordinate
         logger.info(f"Calculated Z translation: {z_axis_translate:.2f} (Real min Z: {lowest_coordinate:.2f} -> MC Y: {LOWEST_MINECRAFT_POINT})")
+
+
+        # -------------------------- Initialize mc function -------------------------- #
+
+        mcfunction_filepath = mcfunction_folderpath / (tile_bbox + '.mcfunction')
+        text_mcfunction = '# Auto-generated MCFunction for placing lidar data\n'
+        text_mcfunction += '/gamerule doDaylightCycle false\n'
+        text_mcfunction += '/time set day\n'
+        text_mcfunction += '/gamerule randomTickSpeed 0\n'
+        text_mcfunction += '/gamemode spectator @s\n'
+        text_mcfunction += '/say Starting lidar placement...\n'
 
         # ----------------------------- Batch Calculation ---------------------------- #
         tile_edge_size = mnt_array.shape[0] 
@@ -634,21 +646,35 @@ if __name__=='__main__':
                     xmax_absolute = tile_x_origin + xmax_relative
                     ymin_absolute = tile_y_origin + ymin_relative
                     ymax_absolute = tile_y_origin + ymax_relative
-
-                    logger.info(f"Batch ({batch_x}, {batch_y}) - Coordinates: ({xmin_absolute}, {ymin_absolute}) - ({xmax_absolute}, {ymax_absolute})")
-                    
+                   
                     # ------------------------------ MNT batch data ------------------------------ #
                     mnt_batch_array = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
-                    logger.info(f"Batch ({batch_x}, {batch_y}) - MNT shape: {mnt_batch_array.shape}")
-
 
                     # ------------------------ Write MNT data to schematic ----------------------- #
                     for mc_x in range(mnt_batch_array.shape[0]):
                         for mc_z in range(mnt_batch_array.shape[1]):
-                            schem.setBlock((mc_x, mnt_batch_array[mc_x, mc_z],  mc_z), GROUND_BLOCK_TOP)
+                            mc_y = mnt_batch_array[mc_x, mc_z] + z_axis_translate
+                            schem.setBlock((mc_x, mc_y, mc_z), GROUND_BLOCK_TOP)
+
+                    schem_batch_filename = f'xmin~{xmin_absolute}_ymin~{ymin_absolute}_size~{tile_edge_size}'
+                    schem.save(str(schematic_folderpath), schem_batch_filename, mcschematic.Version.JE_1_21)
+
+                    text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
+                    text_mcfunction += f'/tp @s {xmin_absolute} 0 {ymin_absolute}\n'
+                    text_mcfunction += f'//schematic load {schem_batch_filename}\n'
+                    text_mcfunction += f'//paste -a\n'
+
+        # ---------------------------- Finalize MCFunction --------------------------- #
+        text_mcfunction += '\nsay Lidar placement complete!\n'
+        text_mcfunction += 'gamemode creative @s\n' # Set player back to creative
+
+        with open(mcfunction_filepath, 'w') as f: f.write(text_mcfunction)
+        logger.info(f"Generated MCFunction file: {mcfunction_filepath}")
+        logger.info("--- Processing Finished ---")
 
 
 
+    exit(0)
 
     schem.save(str(Path('data/myschems')), 'test_mnt', mcschematic.Version.JE_1_21)
 
@@ -660,14 +686,6 @@ if __name__=='__main__':
     mcfunction_folderpath.mkdir(parents=True, exist_ok=True)
     mcfunction_filepath = mcfunction_folderpath / (las_name_schem + '.mcfunction')
 
-    
-    
-    text_mcfunction = '# Auto-generated MCFunction for placing lidar data\n'
-    text_mcfunction += '/gamerule doDaylightCycle false\n'
-    text_mcfunction += '/time set day\n'
-    text_mcfunction += '/gamerule randomTickSpeed 0\n'
-    text_mcfunction += '/gamemode spectator @s\n'
-    text_mcfunction += '/say Starting lidar placement...\n'
 
     # ------------------------------ Main Batch Loop ----------------------------- #
     total_batches = BATCH_PER_PRODUCT_SIDE * BATCH_PER_PRODUCT_SIDE
