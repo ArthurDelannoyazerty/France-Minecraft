@@ -17,7 +17,7 @@ import warnings
 from collections import defaultdict
 
 
-from shapely.geometry import mapping, Polygon
+from shapely.geometry import mapping, Polygon, shape
 from shapely.ops import unary_union
 from shapely.vectorized import contains
 from pathlib import Path
@@ -389,7 +389,7 @@ if __name__=='__main__':
     lidar_tiles_available_filepath = Path('data/grid/lidar_public_tiles_available.geojson')
     mnt_tiles_available_filepath   = Path('data/grid/mnt_public_tiles_available.geojson')
 
-    zone_geojson_filepath = Path('data/zone_test.geojson')
+    zone_geojson_filepath = Path('data/zone_test_2.geojson')
 
     lidar_folderpath      = Path('data/tiles/lidar/')
     mnt_folderpath        = Path('data/tiles/mnt')
@@ -486,19 +486,33 @@ if __name__=='__main__':
 
     else:
         logger.info('Using test tiles')
-        lidar_test_feature = {
-            'type': 'Feature', 
-            'id': 'nuage-dalle.278426', 
-            'geometry': {'type': 'Polygon', 'coordinates': [...]}, 
-            'geometry_name': 'geom', 
-            'properties': {
-                'fid': 278426, 
-                'name': 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz', 
-                'url': 'https://storage.sbg.cloud.ovh.net/v1/AUTH_63234f509d6048bca3c9fd7928720ca1/ppk-lidar/RQ/LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'
-            }, 
-            'bbox': [1016000, 6292000, 1017000, 6293000]
-        }
-        lidar_intersecting_feature = [lidar_test_feature]
+        
+        lidar_intersecting_feature = [{'bbox': [1015000, 6292000, 1016000, 6293000],
+            'geometry': {'coordinates': [[[1016000, 6292000],
+                                            [1016000, 6293000],
+                                            [1015000, 6293000],
+                                            [1015000, 6292000],
+                                            [1016000, 6292000]]],
+                        'type': 'Polygon'},
+            'geometry_name': 'geom',
+            'id': 'nuage-dalle.278401',
+            'properties': {'fid': 278401,
+                            'name': 'LHD_FXX_1015_6293_PTS_C_LAMB93_IGN69.copc.laz',
+                            'url': 'https://storage.sbg.cloud.ovh.net/v1/AUTH_63234f509d6048bca3c9fd7928720ca1/ppk-lidar/RQ/LHD_FXX_1015_6293_PTS_C_LAMB93_IGN69.copc.laz'},
+            'type': 'Feature'},
+            {'bbox': [1016000, 6292000, 1017000, 6293000],
+            'geometry': {'coordinates': [[[1017000, 6292000],
+                                            [1017000, 6293000],
+                                            [1016000, 6293000],
+                                            [1016000, 6292000],
+                                            [1017000, 6292000]]],
+                        'type': 'Polygon'},
+            'geometry_name': 'geom',
+            'id': 'nuage-dalle.278426',
+            'properties': {'fid': 278426,
+                            'name': 'LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz',
+                            'url': 'https://storage.sbg.cloud.ovh.net/v1/AUTH_63234f509d6048bca3c9fd7928720ca1/ppk-lidar/RQ/LHD_FXX_1016_6293_PTS_C_LAMB93_IGN69.copc.laz'},
+            'type': 'Feature'}]
 
         mnt_test_feature = {
             'type': 'Feature', 
@@ -513,10 +527,38 @@ if __name__=='__main__':
             }, 
             'bbox': [1016000, 6292000, 1017000, 6293000]
         }
-        mnt_intersecting_feature = [mnt_test_feature]
+        mnt_intersecting_feature = [{'bbox': [1015000, 6292000, 1016000, 6293000],
+            'geometry': {'coordinates': [[[1016000, 6292000],
+                                            [1016000, 6293000],
+                                            [1015000, 6293000],
+                                            [1015000, 6292000],
+                                            [1016000, 6292000]]],
+                        'type': 'Polygon'},
+            'geometry_name': 'geom',
+            'id': 'mnt-dalle.168029',
+            'properties': {'fid': 168029,
+                            'name': 'LHD_FXX_1015_6293_MNT_O_0M50_LAMB93_IGN69.tif',
+                            'srs': 2154,
+                            'url': 'https://data.geopf.fr/wms-r/LHD_FXX_1015_6293_MNT_O_0M50_LAMB93_IGN69.tif?SERVICE=WMS&VERSION=1.3.0&EXCEPTIONS=text/xml&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&FORMAT=image/geotiff&STYLES=&CRS=EPSG:2154&BBOX=1014999.75,6292000.25,1015999.75,6293000.25&WIDTH=2000&HEIGHT=2000&FILENAME=LHD_FXX_1015_6293_MNT_O_0M50_LAMB93_IGN69.tif'},
+            'type': 'Feature'},
+            {'bbox': [1016000, 6292000, 1017000, 6293000],
+            'geometry': {'coordinates': [[[1017000, 6292000],
+                                            [1017000, 6293000],
+                                            [1016000, 6293000],
+                                            [1016000, 6292000],
+                                            [1017000, 6292000]]],
+                        'type': 'Polygon'},
+            'geometry_name': 'geom',
+            'id': 'mnt-dalle.168575',
+            'properties': {'fid': 168575,
+                            'name': 'LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif',
+                            'srs': 2154,
+                            'url': 'https://data.geopf.fr/wms-r/LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif?SERVICE=WMS&VERSION=1.3.0&EXCEPTIONS=text/xml&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&FORMAT=image/geotiff&STYLES=&CRS=EPSG:2154&BBOX=1015999.75,6292000.25,1016999.75,6293000.25&WIDTH=2000&HEIGHT=2000&FILENAME=LHD_FXX_1016_6293_MNT_O_0M50_LAMB93_IGN69.tif'},
+            'type': 'Feature'}]
 
 
     # ----------------------- Download the tiles if needed ----------------------- #
+
 
     def stream_download(url:str, output_filepath:Path, desc:str='Item Download'):
         response = requests.get(url, stream=True)
@@ -549,12 +591,18 @@ if __name__=='__main__':
     # We assume lidar and MNT have the same bbox 
     tiles = {}
     for lidar_feature in lidar_intersecting_feature:
-        lidar_bbox_str  = '-'.join(map(str, lidar_feature['bbox']))
+        try:
+            bbox = lidar_feature['bbox']
+        except:
+            bbox = shape(lidar_feature['geometry']).bounds
+            bbox = [int(e) for e in bbox]
+
+        lidar_bbox_str  = '-'.join(map(str, bbox))
         if lidar_bbox_str not in tiles:
             tiles[lidar_bbox_str] = {}
         tiles[lidar_bbox_str]['lidar'] = {
             'filepath': lidar_folderpath / lidar_feature['properties']['name'],
-            'bbox': lidar_feature['bbox']
+            'bbox': bbox
         }
 
     for mnt_feature in mnt_intersecting_feature:    
@@ -590,8 +638,27 @@ if __name__=='__main__':
         # --------------------------------- clean MNT -------------------------------- #
         logger.info(f"Cleaning MNT data...")
         mnt_array:np.ndarray = mnt.read(1)
-        mnt_array[0] = mnt_array[1]                     # Replace first row with second row (to avoid NaN/-9999.0 issues)      
+        mnt_array[0][0] = -9999.0
         
+        def replace_errors_with_neighbor_mean(arr):
+            """Replace -9999.0 values with mean of valid neighbors (8-connected)."""
+            result = arr.copy()
+            error_mask = (arr == -9999.0)
+            
+            for i, j in np.argwhere(error_mask):
+                # Get 3x3 neighborhood, handling boundaries
+                neighbors = arr[max(0, i-1):i+2, max(0, j-1):j+2]
+                # Get valid neighbors (not -9999.0 and not the center cell)
+                valid = neighbors[(neighbors != -9999.0)]
+                if len(valid) > 1:  # Exclude center cell
+                    valid = valid[valid != arr[i, j]]  # Remove center if it somehow got included
+                
+                if len(valid) > 0:
+                    result[i, j] = np.mean(valid)
+            return result
+        
+        
+        mnt_array = replace_errors_with_neighbor_mean(mnt_array)
         
         # Pooling the MNT array to transform a mnt resolution of 0.5m to 1m
         M, N = mnt_array.shape
@@ -635,45 +702,44 @@ if __name__=='__main__':
         mnt_array = np.flip(mnt_array, axis=0)  # Flip the MNT array to match Minecraft coordinates (Y down)
 
 
-        with logging_redirect_tqdm():
-            for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis', position=0):
-                for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis', leave=False, position=1):
+        for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis', position=0):
+            for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis', leave=False, position=1):
 
-                    schem = mcschematic.MCSchematic()
+                schem = mcschematic.MCSchematic()
 
-                    # ------------------------ Calculate batch coordinates ----------------------- #
-                    xmin_relative = batch_size * batch_x
-                    xmax_relative = batch_size * (batch_x + 1)
-                    ymin_relative = batch_size * batch_y
-                    ymax_relative = batch_size * (batch_y + 1)                    
+                # ------------------------ Calculate batch coordinates ----------------------- #
+                xmin_relative = batch_size * batch_x
+                xmax_relative = batch_size * (batch_x + 1)
+                ymin_relative = batch_size * batch_y
+                ymax_relative = batch_size * (batch_y + 1)                    
 
-                    xmin_absolute = tile_x_origin + xmin_relative
-                    xmax_absolute = tile_x_origin + xmax_relative
-                    ymin_absolute = tile_y_origin + ymin_relative
-                    ymax_absolute = tile_y_origin + ymax_relative
-                   
-                    # ------------------------------ MNT batch data ------------------------------ #
-                    mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
-                    mnt_batch_array = mnt_batch_array + z_axis_translate
+                xmin_absolute = tile_x_origin + xmin_relative
+                xmax_absolute = tile_x_origin + xmax_relative
+                ymin_absolute = tile_y_origin + ymin_relative
+                ymax_absolute = tile_y_origin + ymax_relative
+               
+                # ------------------------------ MNT batch data ------------------------------ #
+                mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
+                mnt_batch_array = mnt_batch_array + z_axis_translate
 
 
-                    # ------------------------ Write MNT data to schematic ----------------------- #
-                    for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT X', position=2, leave=False):
-                        for y in range(mnt_batch_array.shape[1]):
-                            z = mnt_batch_array[x, y]
+                # ------------------------ Write MNT data to schematic ----------------------- #
+                for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT X', position=2, leave=False):
+                    for y in range(mnt_batch_array.shape[1]):
+                        z = mnt_batch_array[x, y]
 
-                            schem.setBlock((x, z, y), GROUND_BLOCK_TOP)
-                            for i in range(1, GROUND_THICKNESS+1):
-                                if z-i > LOWEST_MINECRAFT_POINT:
-                                    schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
+                        schem.setBlock((x, z, y), GROUND_BLOCK_TOP)
+                        for i in range(1, GROUND_THICKNESS+1):
+                            if z-i > LOWEST_MINECRAFT_POINT:
+                                schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
 
-                    schem_batch_filename = f'xmin~{xmin_absolute}_ymin~{ymin_absolute}_size~{tile_edge_size}'
-                    schem.save(str(schematic_folderpath), schem_batch_filename, mcschematic.Version.JE_1_21)
+                schem_batch_filename = f'xmin~{xmin_absolute}_ymin~{ymin_absolute}_size~{tile_edge_size}'
+                schem.save(str(schematic_folderpath), schem_batch_filename, mcschematic.Version.JE_1_21)
 
-                    text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y + 1}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
-                    text_mcfunction += f'/tp @s {xmin_absolute} 0 {ymin_absolute}\n'
-                    text_mcfunction += f'//schematic load {schem_batch_filename}\n'
-                    text_mcfunction += f'//paste -a\n'
+                text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y + 1}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
+                text_mcfunction += f'/tp @s {xmin_absolute} 0 {ymin_absolute}\n'
+                text_mcfunction += f'//schematic load {schem_batch_filename}\n'
+                text_mcfunction += f'//paste -a\n'
 
         # ---------------------------- Finalize MCFunction --------------------------- #
         text_mcfunction += '\nsay Lidar placement complete!\n'
