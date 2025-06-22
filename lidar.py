@@ -405,7 +405,7 @@ if __name__=='__main__':
     GROUND_CLASS = 2
     GROUND_BLOCK_TOP = "minecraft:grass_block"
     GROUND_BLOCK_BELOW = "minecraft:dirt"
-    GROUND_THICKNESS = 8
+    GROUND_THICKNESS = 10
 
     # Processing parameters
     PERCENTAGE_TO_REMOVE_NON_GROUND = 0     # Decimation for non-ground features
@@ -610,7 +610,7 @@ if __name__=='__main__':
 
 
         # ------------------------- Calculate Global Z Offset ------------------------ #
-        z_axis_translate = LOWEST_MINECRAFT_POINT - lowest_coordinate
+        z_axis_translate:int = LOWEST_MINECRAFT_POINT - lowest_coordinate
         logger.info(f"Calculated Z translation: {z_axis_translate:.2f} (Real min Z: {lowest_coordinate:.2f} -> MC Y: {LOWEST_MINECRAFT_POINT})")
 
 
@@ -631,8 +631,8 @@ if __name__=='__main__':
         tile_x_origin, tile_y_origin = tile_data['mnt']['bbox'][0], tile_data['mnt']['bbox'][1]
 
         with logging_redirect_tqdm():
-            for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis'):
-                for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis'):
+            for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis', position=0):
+                for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis', leave=False, position=1):
 
                     schem = mcschematic.MCSchematic()
 
@@ -649,12 +649,18 @@ if __name__=='__main__':
                    
                     # ------------------------------ MNT batch data ------------------------------ #
                     mnt_batch_array = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
+                    mnt_batch_array = mnt_batch_array + z_axis_translate
+
 
                     # ------------------------ Write MNT data to schematic ----------------------- #
-                    for mc_x in range(mnt_batch_array.shape[0]):
+                    for mc_x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT X', position=2, leave=False):
                         for mc_z in range(mnt_batch_array.shape[1]):
-                            mc_y = mnt_batch_array[mc_x, mc_z] + z_axis_translate
+                            mc_y = mnt_batch_array[mc_x, mc_z]
+                            
                             schem.setBlock((mc_x, mc_y, mc_z), GROUND_BLOCK_TOP)
+                            for i in range(1, GROUND_THICKNESS+1):
+                                if mc_y - i > LOWEST_MINECRAFT_POINT:
+                                    schem.setBlock((mc_x, mc_y-i, mc_z), GROUND_BLOCK_BELOW)
 
                     schem_batch_filename = f'xmin~{xmin_absolute}_ymin~{ymin_absolute}_size~{tile_edge_size}'
                     schem.save(str(schematic_folderpath), schem_batch_filename, mcschematic.Version.JE_1_21)
@@ -676,15 +682,8 @@ if __name__=='__main__':
 
     exit(0)
 
-    schem.save(str(Path('data/myschems')), 'test_mnt', mcschematic.Version.JE_1_21)
 
 
-
-
-    # ---------------------------- Generate MCFunction --------------------------- #
-    mcfunction_folderpath = Path('data/mcfunctions')
-    mcfunction_folderpath.mkdir(parents=True, exist_ok=True)
-    mcfunction_filepath = mcfunction_folderpath / (las_name_schem + '.mcfunction')
 
 
     # ------------------------------ Main Batch Loop ----------------------------- #

@@ -5,11 +5,11 @@ import time
 from pathlib import Path
 
 
-mcfunction_filepath = Path('data/mcfunctions/LHD_FXX_0440_6718_PTS_C_LAMB93_IGN69.mcfunction')
+mcfunction_filepath = Path('data/mcfunctions/1016000-6292000-1017000-6293000.mcfunction')
 
-TIME_AFTER_TP = 1
-TIME_AFTER_SCHEMATIC_LOAD = 0.2
-TIME_AFTER_PASTE = 5
+TIME_AFTER_TP = 15
+TIME_AFTER_SCHEMATIC_LOAD = 2
+TIME_AFTER_PASTE = 15
 
 with open(mcfunction_filepath, 'r') as f:
     mcfunction_lines = f.readlines()
