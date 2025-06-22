@@ -7,9 +7,9 @@ from pathlib import Path
 
 mcfunction_filepath = Path('data/mcfunctions/1016000-6292000-1017000-6293000.mcfunction')
 
-TIME_AFTER_TP = 15
+TIME_AFTER_TP = 6
 TIME_AFTER_SCHEMATIC_LOAD = 2
-TIME_AFTER_PASTE = 15
+TIME_AFTER_PASTE = 6
 
 with open(mcfunction_filepath, 'r') as f:
     mcfunction_lines = f.readlines()

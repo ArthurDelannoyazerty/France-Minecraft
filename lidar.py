@@ -630,6 +630,11 @@ if __name__=='__main__':
 
         tile_x_origin, tile_y_origin = tile_data['mnt']['bbox'][0], tile_data['mnt']['bbox'][1]
 
+        # Transform the coordinate for the minecraft world
+        mnt_array = np.rot90(mnt_array, k=1)    # Rotate the MNT array counter-clockwise by 90 degrees (a quarter turn)
+        mnt_array = np.flip(mnt_array, axis=0)  # Flip the MNT array to match Minecraft coordinates (Y down)
+
+
         with logging_redirect_tqdm():
             for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis', position=0):
                 for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis', leave=False, position=1):
@@ -648,24 +653,24 @@ if __name__=='__main__':
                     ymax_absolute = tile_y_origin + ymax_relative
                    
                     # ------------------------------ MNT batch data ------------------------------ #
-                    mnt_batch_array = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
+                    mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
                     mnt_batch_array = mnt_batch_array + z_axis_translate
 
 
                     # ------------------------ Write MNT data to schematic ----------------------- #
-                    for mc_x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT X', position=2, leave=False):
-                        for mc_z in range(mnt_batch_array.shape[1]):
-                            mc_y = mnt_batch_array[mc_x, mc_z]
-                            
-                            schem.setBlock((mc_x, mc_y, mc_z), GROUND_BLOCK_TOP)
+                    for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT X', position=2, leave=False):
+                        for y in range(mnt_batch_array.shape[1]):
+                            z = mnt_batch_array[x, y]
+
+                            schem.setBlock((x, z, y), GROUND_BLOCK_TOP)
                             for i in range(1, GROUND_THICKNESS+1):
-                                if mc_y - i > LOWEST_MINECRAFT_POINT:
-                                    schem.setBlock((mc_x, mc_y-i, mc_z), GROUND_BLOCK_BELOW)
+                                if z-i > LOWEST_MINECRAFT_POINT:
+                                    schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
 
                     schem_batch_filename = f'xmin~{xmin_absolute}_ymin~{ymin_absolute}_size~{tile_edge_size}'
                     schem.save(str(schematic_folderpath), schem_batch_filename, mcschematic.Version.JE_1_21)
 
-                    text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
+                    text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y + 1}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
                     text_mcfunction += f'/tp @s {xmin_absolute} 0 {ymin_absolute}\n'
                     text_mcfunction += f'//schematic load {schem_batch_filename}\n'
                     text_mcfunction += f'//paste -a\n'
