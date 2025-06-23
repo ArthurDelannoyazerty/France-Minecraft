@@ -373,6 +373,94 @@ def dominant_voxel_points(
 
 
 
+
+
+def do_No_Class(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[1]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air':
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+def do_Small_Vegetation(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[3]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state==GROUND_BLOCK_TOP:
+            above_block_state = schem.getBlockDataAt((int(x),int(z+1),int(y)))
+            if above_block_state==GROUND_BLOCK_TOP:
+                continue
+            else: 
+                z += 1
+        schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+def do_Medium_Vegetation(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[4]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+def do_High_Vegetation(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[5]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+def do_Building(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[6]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        # Extend the building block to the ground
+        for z_below in range(int(z), LOWEST_MINECRAFT_POINT, -1):
+            below_block_state = schem.getBlockDataAt((int(x),int(z_below),int(y)))
+            if below_block_state==GROUND_BLOCK_TOP:
+                break
+            schem.setBlock((int(x),int(z_below),int(y)), bloc_type[0])
+
+def do_Water(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[9]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+def do_Bridge(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[17]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+def do_Perennial_Soil(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[64]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+def do_Virtual_Points(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[66]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+def do_Miscellaneous(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
+    bloc_type = choosen_template_point_classes[67]
+    for x,y,z in coordinates:
+        current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
+        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
+            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+
+
+
+
+
+
 # --- Main Execution ---
 if __name__=='__main__':
     log_name = Path(__file__).stem
@@ -659,7 +747,7 @@ if __name__=='__main__':
         
         
         mnt_array = replace_errors_with_neighbor_mean(mnt_array)
-        
+
         # Pooling the MNT array to transform a mnt resolution of 0.5m to 1m
         M, N = mnt_array.shape
         K, L = 2, 2
@@ -724,18 +812,66 @@ if __name__=='__main__':
 
 
                 # ------------------------ Write MNT data to schematic ----------------------- #
-                for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT X', position=2, leave=False):
-                    for y in range(mnt_batch_array.shape[1]):
-                        z = mnt_batch_array[x, y]
+                # for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT block batch', leave=False):
+                #     for y in range(mnt_batch_array.shape[1]):
+                #         z = mnt_batch_array[x, y]
 
-                        schem.setBlock((x, z, y), GROUND_BLOCK_TOP)
-                        for i in range(1, GROUND_THICKNESS+1):
-                            if z-i > LOWEST_MINECRAFT_POINT:
-                                schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
+                #         schem.setBlock((x, z, y), GROUND_BLOCK_TOP)
+                #         for i in range(1, GROUND_THICKNESS+1):
+                #             if z-i > LOWEST_MINECRAFT_POINT:
+                #                 schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
+                
 
+                # ----------------------------- Lidar batch data ----------------------------- #
+                lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_absolute) & 
+                                                   (lidar.x>=xmin_absolute) & 
+                                                   (lidar.y<=ymax_absolute) & 
+                                                   (lidar.y>=ymin_absolute)]
+                
+                point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
+
+                # Voxelize the points for each class
+                point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
+
+                for point_class in tqdm(point_classes_no_ground, desc='Voxelize lidar points', leave=False):
+                    mask = lidar_batch.classification == point_class
+                    batch_ground_points_no_ground = lidar_batch[mask]
+
+                    x = batch_ground_points_no_ground.x
+                    y = batch_ground_points_no_ground.y
+                    z = batch_ground_points_no_ground.z + z_axis_translate
+                    xyz_no_ground = np.vstack([x, y, z]).T
+
+                    points_relative_to_voxel_origin = xyz_no_ground - [tile_x_origin, tile_y_origin, 0]
+                    
+                    voxel_origins_relative_m = find_occupied_voxels_vectorized(
+                        points_relative_to_voxel_origin,
+                        voxel_size=VOXEL_SIDE,
+                        min_points_per_voxel=0
+                    )
+                    point_coordinates[point_class] = voxel_origins_relative_m
+
+                dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
+
+
+                # ----------------------- Write lidar data to schematic ---------------------- #
+                do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
+                do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
+                do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
+                do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
+                do_Building(         filtered_points[6], choosen_template_point_classes, schem)
+                do_Water(            filtered_points[9], choosen_template_point_classes, schem)
+                do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
+                do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
+                do_Virtual_Points(   filtered_points[66], choosen_template_point_classes, schem)
+                do_Miscellaneous(    filtered_points[67], choosen_template_point_classes, schem)
+
+
+                # --------------------------- Save batch schematic --------------------------- #
                 schem_batch_filename = f'xmin~{xmin_absolute}_ymin~{ymin_absolute}_size~{tile_edge_size}'
                 schem.save(str(schematic_folderpath), schem_batch_filename, mcschematic.Version.JE_1_21)
 
+                # ---------------------------- Add batch functions --------------------------- #
                 text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y + 1}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
                 text_mcfunction += f'/tp @s {xmin_absolute} 0 {ymin_absolute}\n'
                 text_mcfunction += f'//schematic load {schem_batch_filename}\n'
@@ -744,272 +880,7 @@ if __name__=='__main__':
         # ---------------------------- Finalize MCFunction --------------------------- #
         text_mcfunction += '\nsay Lidar placement complete!\n'
         text_mcfunction += 'gamemode creative @s\n' # Set player back to creative
-
-        with open(mcfunction_filepath, 'w') as f: f.write(text_mcfunction)
+        with open(mcfunction_filepath, 'w') as f: 
+            f.write(text_mcfunction)
         logger.info(f"Generated MCFunction file: {mcfunction_filepath}")
         logger.info("--- Processing Finished ---")
-
-
-
-    exit(0)
-
-
-
-
-
-    # ------------------------------ Main Batch Loop ----------------------------- #
-    total_batches = BATCH_PER_PRODUCT_SIDE * BATCH_PER_PRODUCT_SIDE
-    for index_batch, (xmin, ymin, xmax, ymax) in enumerate(batch_limit_list):
-        batch_num = index_batch + 1
-        logger.info(f"\n--- Processing Batch {batch_num}/{total_batches} ---")
-        logger.info(f"Bounds (X): {xmin:.2f} - {xmax:.2f}, (Y): {ymin:.2f} - {ymax:.2f}")
-
-        schem = mcschematic.MCSchematic()
-        batch_points:laspy.LasData = las[(las.x<=xmax) & (las.x>=xmin) & (las.y<=ymax) & (las.y>=ymin)]
-
-        if len(batch_points) == 0:
-            logger.warning(f"Batch {batch_num} contains no points. Skipping.")
-            text_mcfunction += f'# Skipping empty batch {batch_num}\n'
-            continue
-        
-        logger.info(f"Batch {batch_num}: Found {len(batch_points)} points.")
-
-        # Define the origin for this batch (in Minecraft coordinates)
-        # Use the minimum corner, flip Y
-        batch_origin_mc_x = int(np.floor(xmin)) # Convert mm to m for MC coords
-        batch_origin_mc_z = int(np.floor(-ymax)) # Convert mm to m, flip Y, use MAX Y as MIN Z
-        
-        voxel_origin_x_m = xmin
-        voxel_origin_y_m_flipped = -ymax
-
-         # --- Store voxels temporarily per class ---
-        voxels_by_class = defaultdict(set) # {class_id: set((x,y,z)), ...} -> Stores RELATIVE integer coords
-        
-        # --- 1a. Process Ground (Interpolation & Initial Voxelization) ---
-        DO_GROUND = True
-        def do_ground():
-            logger.info("Processing Ground Layer (Interpolation & Voxelization)...")
-            ground_mask = batch_points.classification == GROUND_CLASS
-            batch_ground_points = batch_points[ground_mask]
-            set_ground_voxels = set() # Store relative integer coords
-
-            if len(batch_ground_points) > 0:
-                x = batch_ground_points.x
-                y = batch_ground_points.y * -1                 # Flip Y
-                z = batch_ground_points.z + z_axis_translate
-                xyz_ground_transformed = np.vstack([x, y, z]).T
-
-                filled_ground_points = interpolate_point_cloud(xyz_ground_transformed, grid_cell_size=INTERPOLATION_GRID_CELL_SIZE)
-
-                # Voxelize relative to batch origin
-                points_relative_to_voxel_origin = filled_ground_points - [voxel_origin_x_m, voxel_origin_y_m_flipped, 0]
-
-                logger.info("Voxelizing filled ground points...")
-                voxel_origins_ground_relative_m = find_occupied_voxels_vectorized(
-                    points_relative_to_voxel_origin,
-                    voxel_size=VOXEL_SIDE,
-                    min_points_per_voxel=0
-                )
-
-                
-
-                # Add ground blocks (Grass & Dirt)
-                logger.info("Creating ground blocks...")
-                voxel_origins_ground_relative_m_int = voxel_origins_ground_relative_m.astype(np.int32)
-                for mc_x, mc_z, mc_y in tqdm(voxel_origins_ground_relative_m_int, desc='Creating Ground'):
-                    set_ground_voxels.add((int(mc_x), int(mc_y), int(mc_z)))
-                    try:
-                        schem.setBlock((mc_x, mc_y,   mc_z), GROUND_BLOCK_TOP  )
-                        schem.setBlock((mc_x, mc_y-1, mc_z), GROUND_BLOCK_BELOW)
-                        schem.setBlock((mc_x, mc_y-2, mc_z), GROUND_BLOCK_BELOW)
-                        schem.setBlock((mc_x, mc_y-3, mc_z), GROUND_BLOCK_BELOW)
-                        schem.setBlock((mc_x, mc_y-4, mc_z), GROUND_BLOCK_BELOW)
-                        schem.setBlock((mc_x, mc_y-5, mc_z), GROUND_BLOCK_BELOW)
-                        schem.setBlock((mc_x, mc_y-6, mc_z), GROUND_BLOCK_BELOW)
-                        schem.setBlock((mc_x, mc_y-7, mc_z), GROUND_BLOCK_BELOW)
-                    except:
-                        pass
-                
-                # Filter lone ground block 
-                logger.info("Filtering lone ground blocks...")
-                nb_grass_block, nb_lone_grass_block = 0, 0
-                for x, y, z in tqdm(set_ground_voxels, desc='Filtering Lone Ground Blocks'):
-                    current_block_state = schem.getBlockDataAt((x,y,z))
-                    if current_block_state!=GROUND_BLOCK_TOP: continue
-                    nb_grass_block += 1
-                    block_state_north = schem.getBlockDataAt((x,   y, z-1))
-                    block_state_south = schem.getBlockDataAt((x,   y, z+1))
-                    block_state_east  = schem.getBlockDataAt((x+1, y, z  ))
-                    block_state_west  = schem.getBlockDataAt((x-1, y, z  ))
-                    # If no neighbors, remove current block and replace dirt block below by grass
-                    if (block_state_north=='minecraft:air' and 
-                        block_state_south=='minecraft:air' and 
-                        block_state_east =='minecraft:air' and 
-                        block_state_west =='minecraft:air'):
-                        nb_lone_grass_block += 1
-                        schem.setBlock((x, y,   z), 'minecraft:air')
-                        schem.setBlock((x, y-1, z), GROUND_BLOCK_TOP)
-                logger.info(f'Total grass block : {nb_grass_block}  |  Lone grass block removed : {nb_lone_grass_block}')
-
-            else:
-                logger.warning(f"Batch {batch_num} has no ground points.")
-
-        if DO_GROUND: do_ground()
-
-        # --- 2. Process other points class ---
-        # For each voxel, what is the main class ?
-        # For each voxel, ignore the others points and get the main point class
-        # For some classes, check the 1/8 of the voxels to check for partial block placement
-
-        logger.info("Processing othher point classes")
-        def coords_no_ground_points():
-            point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
-
-            # Voxelize the points for each class
-            point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
-
-            for point_class in tqdm(point_classes_no_ground, desc='Voxelize points no ground'):
-                mask = batch_points.classification == point_class
-                batch_ground_points_no_ground = batch_points[mask]
-
-                x = batch_ground_points_no_ground.x
-                y = batch_ground_points_no_ground.y * -1                 # Flip Y
-                z = batch_ground_points_no_ground.z + z_axis_translate
-                xyz_no_ground = np.vstack([x, y, z]).T
-
-                points_relative_to_voxel_origin = xyz_no_ground - [voxel_origin_x_m, voxel_origin_y_m_flipped, 0]
-                
-                voxel_origins_relative_m = find_occupied_voxels_vectorized(
-                    points_relative_to_voxel_origin,
-                    voxel_size=VOXEL_SIDE,
-                    min_points_per_voxel=0
-                )
-                point_coordinates[point_class] = voxel_origins_relative_m
-
-            dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
-            return dominant_per_voxel, filtered_points
-
-        _, filtered_points = coords_no_ground_points()
-
-
-        # Do "No Class":
-        def do_No_Class(coordinates):
-            bloc_type = choosen_template_point_classes[1]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air':
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-
-        def do_Small_Vegetation(coordinates):
-            bloc_type = choosen_template_point_classes[3]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state==GROUND_BLOCK_TOP:
-                    above_block_state = schem.getBlockDataAt((int(x),int(z+1),int(y)))
-                    if above_block_state==GROUND_BLOCK_TOP:
-                        continue
-                    else: 
-                        z += 1
-                schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-        
-        def do_Medium_Vegetation(coordinates):
-            bloc_type = choosen_template_point_classes[4]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-        
-        def do_High_Vegetation(coordinates):
-            bloc_type = choosen_template_point_classes[5]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-        
-        def do_Building(coordinates):
-            bloc_type = choosen_template_point_classes[6]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-                # Extend the building block to the ground
-                for z_below in range(int(z), LOWEST_MINECRAFT_POINT, -1):
-                    below_block_state = schem.getBlockDataAt((int(x),int(z_below),int(y)))
-                    if below_block_state==GROUND_BLOCK_TOP:
-                        break
-                    schem.setBlock((int(x),int(z_below),int(y)), bloc_type[0])
-
-        def do_Water(coordinates):
-            bloc_type = choosen_template_point_classes[9]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-
-        def do_Bridge(coordinates):
-            bloc_type = choosen_template_point_classes[17]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-
-        def do_Perennial_Soil(coordinates):
-            bloc_type = choosen_template_point_classes[64]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-
-        def do_Virtual_Points(coordinates):
-            bloc_type = choosen_template_point_classes[66]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-
-        def do_Miscellaneous(coordinates):
-            bloc_type = choosen_template_point_classes[67]
-            for x,y,z in coordinates:
-                current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-                if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-                    schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
-
-
-        
-        do_No_Class(filtered_points[1])
-        do_Small_Vegetation(filtered_points[3])
-        do_Medium_Vegetation(filtered_points[4])
-        do_High_Vegetation(filtered_points[5])
-        do_Building(filtered_points[6])
-        do_Water(filtered_points[9])
-        do_Bridge(filtered_points[17])
-        do_Perennial_Soil(filtered_points[64])
-        do_Virtual_Points(filtered_points[66])
-        do_Miscellaneous(filtered_points[67])
-
-
-
-
-        # --- Save schematic ---
-        schematic_filename = f"b_{batch_num}_of_{total_batches}~x_{batch_origin_mc_x}~z_{batch_origin_mc_z}"
-        schematic_rel_path = f"{las_name_schem}/{schematic_filename}.schem" # Relative path for commands
-
-        schem.save(str(folder_save_myschem), schematic_filename, mcschematic.Version.JE_1_21)
-        logger.info(f"Saved schematic: {folder_save_myschem / (schematic_filename + '.schem')}")
-
-        # --- Add Commands to MCFunction ---
-        text_mcfunction += f'\n/say Placing Batch {batch_num}/{total_batches} at X={batch_origin_mc_x} Z={batch_origin_mc_z}\n'
-        text_mcfunction += f'/tp @s {batch_origin_mc_x} 0 {batch_origin_mc_z}\n'
-        text_mcfunction += f'//schematic load {schematic_rel_path}\n'
-        text_mcfunction += f'//paste -a\n' 
-
-
-
-    # ---------------------------- Finalize MCFunction --------------------------- #
-    text_mcfunction += '\nsay Lidar placement complete!\n'
-    text_mcfunction += 'gamemode creative @s\n' # Set player back to creative
-
-    with open(mcfunction_filepath, 'w') as f:
-        f.write(text_mcfunction)
-    logger.info(f"Generated MCFunction file: {mcfunction_filepath}")
-    logger.info("--- Processing Finished ---")
