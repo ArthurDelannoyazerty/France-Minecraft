@@ -755,6 +755,11 @@ if __name__=='__main__':
         pooled_mnt_array:np.ndarray = mnt_array.reshape(MK, K, NL, L).mean(axis=(1, 3))  # Average pooling
         mnt_array = pooled_mnt_array.astype(np.int32)          # round the values, int16 ok but strange errors in mcschematic so int32 instead
         lowest_coordinate = mnt_array.min()
+
+        # Transform the coordinate for the minecraft world
+        mnt_array = np.rot90(mnt_array, k=1)    # Rotate the MNT array counter-clockwise by 90 degrees (a quarter turn)
+        mnt_array = np.flip(mnt_array, axis=0)  # Flip the MNT array to match Minecraft coordinates (Y down)
+
         
         logger.info(f"MNT data cleaned")
 
@@ -762,6 +767,14 @@ if __name__=='__main__':
         logger.info(f"Loading lidar file: {lidar_tile_filepath} ...")
         lidar = laspy.read(lidar_tile_filepath)
         logger.info(f"Lidar loaded | containing {len(lidar.points)} points.")
+
+
+        # -------------------------------- Clean Lidar ------------------------------- #
+
+        tile_min_x, tile_min_y, tile_max_x, tile_max_y = tile_data['lidar']['bbox']
+        lidar.x = np.array(lidar.x) - tile_min_x
+        lidar.y = np.array(lidar.y) - tile_min_y
+
 
 
         # ------------------------- Calculate Global Z Offset ------------------------ #
@@ -783,12 +796,6 @@ if __name__=='__main__':
         tile_edge_size = mnt_array.shape[0] 
         batch_size = tile_edge_size // BATCH_PER_PRODUCT_SIDE
 
-        tile_x_origin, tile_y_origin = tile_data['mnt']['bbox'][0], tile_data['mnt']['bbox'][1]
-
-        # Transform the coordinate for the minecraft world
-        mnt_array = np.rot90(mnt_array, k=1)    # Rotate the MNT array counter-clockwise by 90 degrees (a quarter turn)
-        mnt_array = np.flip(mnt_array, axis=0)  # Flip the MNT array to match Minecraft coordinates (Y down)
-
 
         for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis', position=0):
             for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis', leave=False, position=1):
@@ -801,11 +808,11 @@ if __name__=='__main__':
                 ymin_relative = batch_size * batch_y
                 ymax_relative = batch_size * (batch_y + 1)                    
 
-                xmin_absolute = tile_x_origin + xmin_relative
-                xmax_absolute = tile_x_origin + xmax_relative
-                ymin_absolute = tile_y_origin + ymin_relative
-                ymax_absolute = tile_y_origin + ymax_relative
-               
+                xmin_absolute = tile_min_x + xmin_relative
+                xmax_absolute = tile_min_x + xmax_relative
+                ymin_absolute = tile_min_y + ymin_relative
+                ymax_absolute = tile_min_y + ymax_relative
+
                 # ------------------------------ MNT batch data ------------------------------ #
                 mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
                 mnt_batch_array = mnt_batch_array + z_axis_translate
@@ -823,12 +830,12 @@ if __name__=='__main__':
                 
 
                 # ----------------------------- Lidar batch data ----------------------------- #
-                lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_absolute) & 
-                                                   (lidar.x>=xmin_absolute) & 
-                                                   (lidar.y<=ymax_absolute) & 
-                                                   (lidar.y>=ymin_absolute)]
+                lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
+                                                   (lidar.x>=xmin_relative) & 
+                                                   (lidar.y<=ymax_relative) & 
+                                                   (lidar.y>=ymin_relative)]
                 
-                point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
+                point_classes_no_ground =  [1, 2, 3, 4, 5, 6, 9, 17, 64, 66, 67]
 
                 # Voxelize the points for each class
                 point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
@@ -842,7 +849,7 @@ if __name__=='__main__':
                     z = batch_ground_points_no_ground.z + z_axis_translate
                     xyz_no_ground = np.vstack([x, y, z]).T
 
-                    points_relative_to_voxel_origin = xyz_no_ground - [tile_x_origin, tile_y_origin, 0]
+                    points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
                     
                     voxel_origins_relative_m = find_occupied_voxels_vectorized(
                         points_relative_to_voxel_origin,
@@ -856,10 +863,11 @@ if __name__=='__main__':
 
                 # ----------------------- Write lidar data to schematic ---------------------- #
                 do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
+                do_No_Class(         filtered_points[2], choosen_template_point_classes, schem)
                 do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
                 do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
                 do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
-                do_Building(         filtered_points[6], choosen_template_point_classes, schem)
+                do_Bridge(         filtered_points[6], choosen_template_point_classes, schem)
                 do_Water(            filtered_points[9], choosen_template_point_classes, schem)
                 do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
                 do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
