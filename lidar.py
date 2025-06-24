@@ -278,7 +278,9 @@ if __name__=='__main__':
 
 
     # Minecraft parameters
-    LOWEST_MINECRAFT_POINT = 0  #2031          # If normal minecraft : -60
+    MANUAL_Z_AXIS_TRANSLATE = True  # If True, you must set LOWEST_MINECRAFT_POINT to the lowest point of the MNT
+    MANUAL_Z_AXIS_TRANSLATE_VALUE = -2000  # If MANUAL_Z_AXIS_TRANSLATE is True, this value will be used to translate the Z axis of the MNT to the Minecraft world
+    LOWEST_MINECRAFT_POINT = -2031          # If normal minecraft : -60
     HIGHEST_MINECRAFT_POINT = 2025          # If normal minecraft : 319
     GROUND_CLASS = 2
     GROUND_BLOCK_TOP = "minecraft:grass_block"
@@ -566,7 +568,10 @@ if __name__=='__main__':
 
 
         # ------------------------- Calculate Global Z Offset ------------------------ #
-        z_axis_translate:int = LOWEST_MINECRAFT_POINT - lowest_coordinate
+        if MANUAL_Z_AXIS_TRANSLATE:
+            z_axis_translate = MANUAL_Z_AXIS_TRANSLATE_VALUE
+        else:
+            z_axis_translate:int = LOWEST_MINECRAFT_POINT - lowest_coordinate
         logger.info(f"Calculated Z translation: {z_axis_translate:.2f} (Real min Z: {lowest_coordinate:.2f} -> MC Y: {LOWEST_MINECRAFT_POINT})")
 
 
