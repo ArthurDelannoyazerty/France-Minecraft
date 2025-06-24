@@ -8,8 +8,8 @@ from pathlib import Path
 mcfunction_folderpath = Path('data/mcfunctions/')
 
 TIME_AFTER_TP = 6
-TIME_AFTER_SCHEMATIC_LOAD = 3
-TIME_AFTER_PASTE = 6
+TIME_AFTER_SCHEMATIC_LOAD = 6
+TIME_AFTER_PASTE = 15
 
 
 time.sleep(5)

@@ -10,10 +10,11 @@ import pyvista as pv
 import geopandas as gpd
 import mcschematic
 import pyproj
-
+import math
+from collections import defaultdict, Counter
+from typing import Dict, List, Tuple
 from scipy.interpolate import LinearNDInterpolator
 # NEW: Import warnings to suppress potential division-by-zero in IDW if needed
-import warnings
 from collections import defaultdict
 
 
@@ -24,7 +25,6 @@ from pathlib import Path
 from utils.logger import setup_logging
 from script import find_occupied_voxels_vectorized
 from tqdm.auto import tqdm
-from tqdm.contrib.logging import logging_redirect_tqdm
 
 
 logger = logging.getLogger(__name__)
@@ -320,9 +320,7 @@ def interpolate_point_cloud(points, grid_cell_size):
     # display_point_cloud(all_points)
     return all_points
 
-import math
-from collections import defaultdict, Counter
-from typing import Dict, List, Tuple, Any
+
 
 Point = Tuple[float, float, float]
 Class = str
@@ -721,10 +719,10 @@ if __name__=='__main__':
         # --------------------------------- Load MNT --------------------------------- #
         logger.info(f"Loading MNT file: {mnt_tile_filepath} ...")
         mnt = rasterio.open(mnt_tile_filepath)
-        logger.info(f"MNT loaded")
+        logger.info("MNT loaded")
 
         # --------------------------------- clean MNT -------------------------------- #
-        logger.info(f"Cleaning MNT data...")
+        logger.info("Cleaning MNT data...")
         mnt_array:np.ndarray = mnt.read(1)
         mnt_array[0][0] = -9999.0
         
@@ -759,7 +757,7 @@ if __name__=='__main__':
         # Transform the coordinate for the minecraft world
         mnt_array = mnt_array.T
         
-        logger.info(f"MNT data cleaned")
+        logger.info("MNT data cleaned")
 
         # ------------------------------ Load Lidar Data ----------------------------- #
         logger.info(f"Loading lidar file: {lidar_tile_filepath} ...")
@@ -828,49 +826,48 @@ if __name__=='__main__':
                 
 
                 # ----------------------------- Lidar batch data ----------------------------- #
-                # lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
-                #                                    (lidar.x>=xmin_relative) & 
-                #                                    (lidar.y<=ymax_relative) & 
-                #                                    (lidar.y>=ymin_relative)]
+                lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
+                                                   (lidar.x>=xmin_relative) & 
+                                                   (lidar.y<=ymax_relative) & 
+                                                   (lidar.y>=ymin_relative)]
                 
-                # point_classes_no_ground =  [1, 2, 3, 4, 5, 6, 9, 17, 64, 66, 67]
+                point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
 
-                # # Voxelize the points for each class
-                # point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
+                # Voxelize the points for each class
+                point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
 
-                # for point_class in tqdm(point_classes_no_ground, desc='Voxelize lidar points', leave=False):
-                #     mask = lidar_batch.classification == point_class
-                #     batch_ground_points_no_ground = lidar_batch[mask]
+                for point_class in tqdm(point_classes_no_ground, desc='Voxelize lidar points', leave=False):
+                    mask = lidar_batch.classification == point_class
+                    batch_ground_points_no_ground = lidar_batch[mask]
 
-                #     x = batch_ground_points_no_ground.x
-                #     y = batch_ground_points_no_ground.y
-                #     z = batch_ground_points_no_ground.z + z_axis_translate
-                #     xyz_no_ground = np.vstack([x, y, z]).T
+                    x = batch_ground_points_no_ground.x
+                    y = batch_ground_points_no_ground.y
+                    z = batch_ground_points_no_ground.z + z_axis_translate
+                    xyz_no_ground = np.vstack([x, y, z]).T
 
-                #     points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
+                    points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
                     
-                #     voxel_origins_relative_m = find_occupied_voxels_vectorized(
-                #         points_relative_to_voxel_origin,
-                #         voxel_size=VOXEL_SIDE,
-                #         min_points_per_voxel=0
-                #     )
-                #     point_coordinates[point_class] = voxel_origins_relative_m
+                    voxel_origins_relative_m = find_occupied_voxels_vectorized(
+                        points_relative_to_voxel_origin,
+                        voxel_size=VOXEL_SIDE,
+                        min_points_per_voxel=0
+                    )
+                    point_coordinates[point_class] = voxel_origins_relative_m
 
-                # dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
+                dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
 
 
-                # # ----------------------- Write lidar data to schematic ---------------------- #
-                # do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
-                # do_No_Class(         filtered_points[2], choosen_template_point_classes, schem)
-                # do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
-                # do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
-                # do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
-                # do_Bridge(         filtered_points[6], choosen_template_point_classes, schem)
-                # do_Water(            filtered_points[9], choosen_template_point_classes, schem)
-                # do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
-                # do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
-                # do_Virtual_Points(   filtered_points[66], choosen_template_point_classes, schem)
-                # do_Miscellaneous(    filtered_points[67], choosen_template_point_classes, schem)
+                # ----------------------- Write lidar data to schematic ---------------------- #
+                do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
+                do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
+                do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
+                do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
+                do_Building(         filtered_points[6], choosen_template_point_classes, schem)
+                do_Water(            filtered_points[9], choosen_template_point_classes, schem)
+                do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
+                do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
+                do_Virtual_Points(   filtered_points[66], choosen_template_point_classes, schem)
+                do_Miscellaneous(    filtered_points[67], choosen_template_point_classes, schem)
 
 
                 # --------------------------- Save batch schematic --------------------------- #
@@ -881,7 +878,7 @@ if __name__=='__main__':
                 text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y + 1}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
                 text_mcfunction += f'/tp @s {xmin_absolute} 0 {ymin_absolute}\n'
                 text_mcfunction += f'//schematic load {schem_batch_filename}\n'
-                text_mcfunction += f'//paste -a\n'
+                text_mcfunction +=  '//paste -a\n'
 
         # ---------------------------- Finalize MCFunction --------------------------- #
         text_mcfunction += '\nsay Lidar placement complete!\n'
