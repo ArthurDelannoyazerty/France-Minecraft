@@ -757,9 +757,7 @@ if __name__=='__main__':
         lowest_coordinate = mnt_array.min()
 
         # Transform the coordinate for the minecraft world
-        mnt_array = np.rot90(mnt_array, k=1)    # Rotate the MNT array counter-clockwise by 90 degrees (a quarter turn)
-        mnt_array = np.flip(mnt_array, axis=0)  # Flip the MNT array to match Minecraft coordinates (Y down)
-
+        mnt_array = mnt_array.T
         
         logger.info(f"MNT data cleaned")
 
@@ -819,60 +817,60 @@ if __name__=='__main__':
 
 
                 # ------------------------ Write MNT data to schematic ----------------------- #
-                # for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT block batch', leave=False):
-                #     for y in range(mnt_batch_array.shape[1]):
-                #         z = mnt_batch_array[x, y]
+                for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT block batch', leave=False):
+                    for y in range(mnt_batch_array.shape[1]):
+                        z = mnt_batch_array[x, y]
 
-                #         schem.setBlock((x, z, y), GROUND_BLOCK_TOP)
-                #         for i in range(1, GROUND_THICKNESS+1):
-                #             if z-i > LOWEST_MINECRAFT_POINT:
-                #                 schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
+                        schem.setBlock((x, z, y), GROUND_BLOCK_TOP)
+                        for i in range(1, GROUND_THICKNESS+1):
+                            if z-i > LOWEST_MINECRAFT_POINT:
+                                schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
                 
 
                 # ----------------------------- Lidar batch data ----------------------------- #
-                lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
-                                                   (lidar.x>=xmin_relative) & 
-                                                   (lidar.y<=ymax_relative) & 
-                                                   (lidar.y>=ymin_relative)]
+                # lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
+                #                                    (lidar.x>=xmin_relative) & 
+                #                                    (lidar.y<=ymax_relative) & 
+                #                                    (lidar.y>=ymin_relative)]
                 
-                point_classes_no_ground =  [1, 2, 3, 4, 5, 6, 9, 17, 64, 66, 67]
+                # point_classes_no_ground =  [1, 2, 3, 4, 5, 6, 9, 17, 64, 66, 67]
 
-                # Voxelize the points for each class
-                point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
+                # # Voxelize the points for each class
+                # point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
 
-                for point_class in tqdm(point_classes_no_ground, desc='Voxelize lidar points', leave=False):
-                    mask = lidar_batch.classification == point_class
-                    batch_ground_points_no_ground = lidar_batch[mask]
+                # for point_class in tqdm(point_classes_no_ground, desc='Voxelize lidar points', leave=False):
+                #     mask = lidar_batch.classification == point_class
+                #     batch_ground_points_no_ground = lidar_batch[mask]
 
-                    x = batch_ground_points_no_ground.x
-                    y = batch_ground_points_no_ground.y
-                    z = batch_ground_points_no_ground.z + z_axis_translate
-                    xyz_no_ground = np.vstack([x, y, z]).T
+                #     x = batch_ground_points_no_ground.x
+                #     y = batch_ground_points_no_ground.y
+                #     z = batch_ground_points_no_ground.z + z_axis_translate
+                #     xyz_no_ground = np.vstack([x, y, z]).T
 
-                    points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
+                #     points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
                     
-                    voxel_origins_relative_m = find_occupied_voxels_vectorized(
-                        points_relative_to_voxel_origin,
-                        voxel_size=VOXEL_SIDE,
-                        min_points_per_voxel=0
-                    )
-                    point_coordinates[point_class] = voxel_origins_relative_m
+                #     voxel_origins_relative_m = find_occupied_voxels_vectorized(
+                #         points_relative_to_voxel_origin,
+                #         voxel_size=VOXEL_SIDE,
+                #         min_points_per_voxel=0
+                #     )
+                #     point_coordinates[point_class] = voxel_origins_relative_m
 
-                dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
+                # dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
 
 
-                # ----------------------- Write lidar data to schematic ---------------------- #
-                do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
-                do_No_Class(         filtered_points[2], choosen_template_point_classes, schem)
-                do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
-                do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
-                do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
-                do_Bridge(         filtered_points[6], choosen_template_point_classes, schem)
-                do_Water(            filtered_points[9], choosen_template_point_classes, schem)
-                do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
-                do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
-                do_Virtual_Points(   filtered_points[66], choosen_template_point_classes, schem)
-                do_Miscellaneous(    filtered_points[67], choosen_template_point_classes, schem)
+                # # ----------------------- Write lidar data to schematic ---------------------- #
+                # do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
+                # do_No_Class(         filtered_points[2], choosen_template_point_classes, schem)
+                # do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
+                # do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
+                # do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
+                # do_Bridge(         filtered_points[6], choosen_template_point_classes, schem)
+                # do_Water(            filtered_points[9], choosen_template_point_classes, schem)
+                # do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
+                # do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
+                # do_Virtual_Points(   filtered_points[66], choosen_template_point_classes, schem)
+                # do_Miscellaneous(    filtered_points[67], choosen_template_point_classes, schem)
 
 
                 # --------------------------- Save batch schematic --------------------------- #
