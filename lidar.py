@@ -1,26 +1,19 @@
 import rasterio
 import laspy
-import wget
 import logging
 import os
 import requests
 import json
 import numpy as np
-import pyvista as pv
-import geopandas as gpd
 import mcschematic
 import pyproj
 import math
 from collections import defaultdict, Counter
 from typing import Dict, List, Tuple
-from scipy.interpolate import LinearNDInterpolator
 # NEW: Import warnings to suppress potential division-by-zero in IDW if needed
-from collections import defaultdict
 
 
-from shapely.geometry import mapping, Polygon, shape
-from shapely.ops import unary_union
-from shapely.vectorized import contains
+from shapely.geometry import Polygon, shape
 from pathlib import Path
 from utils.logger import setup_logging
 from script import find_occupied_voxels_vectorized
@@ -28,10 +21,6 @@ from tqdm.auto import tqdm
 
 
 logger = logging.getLogger(__name__)
-
-
-crs_leaflet = 'EPSG:4326'
-crs_ign =     'EPSG:2154'
 
 
 def init_folders():
@@ -43,17 +32,6 @@ def init_folders():
     Path('data/myschems'       ).mkdir(parents=True, exist_ok=True)
     Path('data/mcfunctions'    ).mkdir(parents=True, exist_ok=True)
 
-
-def geodataframe_from_leaflet_to_ign(gdf:gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    gdf = gdf.set_crs(crs_leaflet)
-    gdf_transformed  = gdf.to_crs(crs_ign)
-    return gdf_transformed
-
-
-def geodataframe_from_ign_to_leaflet(gdf:gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    gdf = gdf.set_crs(crs_ign)
-    gdf_transformed  = gdf.to_crs(crs_leaflet)
-    return gdf_transformed
 
 
 def download_ign_available_tiles(output_filepath:str, data_type:str, force_download:bool=False):
@@ -133,192 +111,6 @@ def download_ign_available_tiles(output_filepath:str, data_type:str, force_downl
     with open(output_filepath, 'w', encoding='utf-8') as f:
         json.dump(geojson, f, indent=4, ensure_ascii=False)
     logger.info(f"Saved all available tiles metadata to {output_filepath}")
-
-
-
-
-
-def merge_all_geojson_features(geojson_filepath:str, merged_geojson_filepath:str, force:bool=False):
-    # If file already exists and no force, then do not download file
-    if os.path.isfile(merged_geojson_filepath) and not force: return
-    logger.info(f'Merging all tiles from geojson : {geojson_filepath}')
-    gdf = gpd.read_file(geojson_filepath)
-    merged_gdf = unary_union(gdf.geometry)
-    merged_gdf_dict = mapping(merged_gdf)
-    with open(merged_geojson_filepath, 'w') as f:
-        f.write(json.dumps(merged_gdf_dict))
-    logger.info(f'Merged geojson saved at {merged_geojson_filepath}')
-
-
-def decimate_array(array:np.ndarray, percentage_to_remove):
-    """
-    Remove a given percentage of rows from a NumPy array randomly.
-
-    Parameters:
-    - array (np.ndarray): Input array of shape (n, 3).
-    - percentage (float): Percentage of rows to remove (between 0 and 100).
-    - seed (int, optional): Seed for the random number generator for reproducibility.
-
-    Returns:
-    - np.ndarray: Array with the specified percentage of rows removed.
-    """
-    logger.info(f'Decimating array of shape {array.shape} by {percentage_to_remove}%')
-    if not 0 <= percentage_to_remove <= 100:
-        raise ValueError("Percentage must be between 0 and 100.")
-    
-    if percentage_to_remove==0: return array
-
-    mask = np.random.rand(array.shape[0]) > (percentage_to_remove / 100.0)
-    decimated_array = array[mask]
-
-    logger.info(f'Decimation done. Number of points : {array.shape[0]} (before) | {decimated_array.shape[0]} (after)')
-    return decimated_array
-
-
-def display_point_cloud(points):
-    """
-    Display a 3D point cloud using PyVista.
-    
-    Parameters:
-    - points (numpy.ndarray): A Nx3 array of 3D points (x, y, z).
-    """
-    logger.info('Display point cloud')
-    point_cloud = pv.PolyData(points)
-    plotter = pv.Plotter()
-    plotter.add_points(point_cloud, cmap="viridis", point_size=1)
-    plotter.set_background("white")
-    plotter.show()
-
-
-def get_intersecting_tiles_from_order(geojson_order_filepath:str, geojson_all_tiles_available_filepath:str) -> gpd.GeoDataFrame:
-    logger.info('Executing intersection of tiles for the order')
-    logger.info('Loading geojson of all tiles available')
-    available_tiles_gdf = gpd.read_file(geojson_all_tiles_available_filepath)
-    
-    logger.info('Loading geojson orders')
-    order_gdf = gpd.read_file(geojson_order_filepath)
-    logger.info(f'Order geojson head : {order_gdf.head()}')
-
-    logger.info('Filtering the intersecting tiles')
-    intersect_gdf = available_tiles_gdf[available_tiles_gdf.intersects(order_gdf.geometry.iloc[0])]
-    logger.info(f'Intersect GeoDataFrame head : {intersect_gdf.head()}')
-    return intersect_gdf
-
-
-def download_tiles_from_gdf(gdf:gpd.GeoDataFrame, laz_folderpath:Path):
-    for index, row in gdf.iterrows():
-        filename = row['name']
-        url = row['url']
-        filepath = laz_folderpath / filename
-        if not os.path.isfile(filepath):
-            logger.info(f'Downloading file {filename} into {filepath}')
-            wget.download(url, out=str(filepath))
-
-
-def filter_points_by_polygon(xyz, polygon):
-    # Use shapely.vectorized.contains for efficient point-in-polygon testing
-    logger.info(f'Filtering {xyz.shape[0]} points with the polygon {polygon}')
-    inside_mask = contains(polygon, xyz[:, 0], xyz[:, 1])
-    filtered_points = xyz[inside_mask]
-    logger.info(f'Points filtered. {xyz.shape[0]} --> {filtered_points.shape[0]} (Keeping {filtered_points.shape[0]/xyz.shape[0]} %)')
-    return filtered_points
-
-
-def download_available_tile(geojson_all_tiles_available_filepath:Path, laz_folderpath:Path):
-    
-    logger.info('Loading geojson of all tiles available')
-    available_tiles_gdf = gpd.read_file(geojson_all_tiles_available_filepath)
-    logger.info('Loading complete')
-    
-    tile = available_tiles_gdf.iloc[0]
-    print(tile)
-
-    filename = tile.name
-    url_tile = tile.url
-    filepath = laz_folderpath / str(filename) 
-    print(filepath)
-    if not os.path.isfile(filepath):
-        logger.info(f'Downloading file {filename} into {filepath}')
-        wget.download(url_tile, out=str(filepath))
-
-
-
-
-def interpolate_point_cloud(points, grid_cell_size):
-    """
-    Processes a 3D point cloud by:
-      1. Creating a 2D grid that covers the full XY extent of the point cloud.
-      2. Flattening the point cloud onto that grid and flagging the empty cells.
-      3. For each empty cell, adding 4 new points located at evenly-spaced positions inside the cell.
-         Their z-values are obtained via a linear interpolation using the original points.
-    
-    Parameters:
-      points (np.ndarray): Nx3 numpy array of points (x, y, z).
-      grid_cell_size (float): grid cell size (default 0.5 meters).
-    
-    Returns:
-      np.ndarray: The augmented array of points (original + the new points).
-    """
-    logger.info("Applying ground hole filling...")
-
-    # Determine grid bounds (using the points' x-y projection)
-    x_min, y_min = np.min(points[:, :2], axis=0)
-    x_max, y_max = np.max(points[:, :2], axis=0)
-    
-    # Determine the number of cells required in each dimension (ceiling)
-    n_cells_x = int(np.floor((x_max - x_min) / grid_cell_size))
-    n_cells_y = int(np.floor((y_max - y_min) / grid_cell_size))
-    
-    # Create an occupancy grid that marks cells with any point present.
-    # Compute cell indices (i for x, j for y) for each point.
-    ix = ((points[:, 0] - x_min) / grid_cell_size).astype(np.int32)
-    iy = ((points[:, 1] - y_min) / grid_cell_size).astype(np.int32)
-
-    # remove the points on the edge of the grid by replacing them by the last cell
-    ix[np.argwhere(ix==n_cells_x)] = n_cells_x - 1
-    iy[np.argwhere(iy==n_cells_y)] = n_cells_y - 1
-    
-    # Initialize a boolean grid of False (empty)
-    occupancy = np.zeros((n_cells_x, n_cells_y), dtype=bool)
-    occupancy[ix, iy] = True  # mark cells that contain at least one point
-    
-    # Identify indices (i,j) of the empty cells
-    empty_cells = np.argwhere(~occupancy)  # each row: [i, j]
-    
-    # Set new points for each empty cells
-
-    offsets_list = [[x/10,y/10] for x in range(1, 10) for y in range(1, 10)]
-    offsets = np.array(offsets_list) * grid_cell_size
-    
-    
-    # Compute the lower left coordinate for each empty cell.
-    empty_cell_origin = np.empty((empty_cells.shape[0], 2))
-    empty_cell_origin[:, 0] = x_min + empty_cells[:, 0] * grid_cell_size
-    empty_cell_origin[:, 1] = y_min + empty_cells[:, 1] * grid_cell_size
-    
-    # For each empty cell, compute the coordinates for the 4 new sample points.
-    # We use broadcasting to add the offsets to each cell's origin.
-    new_xy = (empty_cell_origin[:, None, :] + offsets[None, :, :]).reshape(-1, 2)
-    
-    # Create a linear interpolator for the z values from the original points using their XY positions.
-    interp_lin = LinearNDInterpolator(points[:, :2], points[:, 2])
-    new_z = interp_lin(new_xy)
-    
-    # (Optional) In case some points fall outside the convex hull and are NaN, one may fill them using nearest neighbor:
-    nan_mask = np.isnan(new_z)
-    if np.any(nan_mask):
-        from scipy.interpolate import NearestNDInterpolator
-        interp_nearest = NearestNDInterpolator(points[:, :2], points[:, 2])
-        new_z[nan_mask] = interp_nearest(new_xy[nan_mask])
-    
-    # Combine the new XY and Z coordinates.
-    new_points = np.hstack([new_xy, new_z[:, None]])
-    # display_point_cloud(new_points)
-    
-    # Merge the original points with the newly generated points.
-    all_points = np.vstack([points, new_points])
-    # display_point_cloud(all_points)
-    return all_points
 
 
 
