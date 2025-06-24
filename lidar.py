@@ -118,7 +118,8 @@ Point = Tuple[float, float, float]
 Class = str
 
 def dominant_voxel_points(
-    point_coordinates: Dict[Class, List[Point]]
+    point_coordinates: Dict[Class, List[Point]],
+    grid_size:float
 ) -> Tuple[Dict[Tuple[int,int,int], Class], Dict[Class, List[Point]]]:
     """
     Given a mapping from point-class → list of (x,y,z) coordinates (floats in 0.5 increments),
@@ -138,6 +139,9 @@ def dominant_voxel_points(
     voxel_counts: Dict[Tuple[int,int,int], Counter] = defaultdict(Counter)
     for cls, pts in point_coordinates.items():
         for x,y,z in pts:
+            # Skip points that are outside the manual batch size limit
+            if x>=grid_size or y>=grid_size or x<=0 or y<=0:
+                continue
             voxel = (math.floor(x), math.floor(y), math.floor(z))
             voxel_counts[voxel][cls] += 1
 
@@ -155,6 +159,9 @@ def dominant_voxel_points(
     filtered_points: Dict[Class, List[Point]] = {cls: [] for cls in point_coordinates}
     for cls, pts in point_coordinates.items():
         for x,y,z in pts:
+            # Skip points that are outside the manual batch size limit
+            if x>=grid_size or y>=grid_size or x<=0 or y<=0:
+                continue
             voxel = (math.floor(x), math.floor(y), math.floor(z))
             if dominant_per_voxel[voxel] == cls:
                 filtered_points[cls].append((x,y,z))
@@ -207,7 +214,7 @@ def do_Building(coordinates, choosen_template_point_classes:dict[int, list[str]]
         # Extend the building block to the ground
         for z_below in range(int(z), LOWEST_MINECRAFT_POINT, -1):
             below_block_state = schem.getBlockDataAt((int(x),int(z_below),int(y)))
-            if below_block_state==GROUND_BLOCK_TOP:
+            if below_block_state==GROUND_BLOCK_BELOW:
                 break
             schem.setBlock((int(x),int(z_below),int(y)), bloc_type[0])
 
@@ -285,7 +292,7 @@ if __name__=='__main__':
     GROUND_CLASS = 2
     GROUND_BLOCK_TOP = "minecraft:grass_block"
     GROUND_BLOCK_BELOW = "minecraft:dirt"
-    GROUND_THICKNESS = 10
+    GROUND_THICKNESS = 16
 
     # Processing parameters
     PERCENTAGE_TO_REMOVE_NON_GROUND = 0     # Decimation for non-ground features
@@ -473,7 +480,7 @@ if __name__=='__main__':
     for lidar_feature in lidar_intersecting_feature:
         try:
             bbox = lidar_feature['bbox']
-        except:
+        except KeyError:
             bbox = shape(lidar_feature['geometry']).bounds
             bbox = [int(e) for e in bbox]
 
@@ -651,7 +658,8 @@ if __name__=='__main__':
                     )
                     point_coordinates[point_class] = voxel_origins_relative_m
 
-                dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates)
+                dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates, grid_size=batch_size)
+
 
 
                 # ----------------------- Write lidar data to schematic ---------------------- #
