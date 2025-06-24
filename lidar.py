@@ -773,7 +773,7 @@ if __name__=='__main__':
 
         tile_min_x, tile_min_y, tile_max_x, tile_max_y = tile_data['lidar']['bbox']
         lidar.x = np.array(lidar.x) - tile_min_x
-        lidar.y = np.array(lidar.y) - tile_min_y
+        lidar.y = (-np.array(lidar.y) + tile_min_y + (tile_max_y - tile_min_y))
 
 
 
