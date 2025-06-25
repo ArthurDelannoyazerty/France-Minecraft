@@ -77,11 +77,8 @@ def download_ign_available_tiles(output_filepath:str, data_type:str, force_downl
         response = requests.get(wfs_url_indexed)
         if response.status_code != 200:
             logger.warning(f"Failed to retrieve data for url : {wfs_url_indexed}. HTTP Status code: {response.status_code}. Trying to continue...")
-            # Decide how to handle errors: break, continue, retry? For now, log and break.
             break
-            # If continuing: start_index += number_returned # Need a default increment or better logic
-            # pbar.update(number_returned) # Assuming number_returned is the expected batch size
-            # continue
+
 
         try:
             response_data = response.json()
@@ -274,14 +271,14 @@ if __name__=='__main__':
     lidar_tiles_available_filepath = Path('data/grid/lidar_public_tiles_available.geojson')
     mnt_tiles_available_filepath   = Path('data/grid/mnt_public_tiles_available.geojson')
 
-    zone_geojson_filepath = Path('data/zone_test_2.geojson')
+    zone_geojson_filepath = Path('data/zone_test_caussol.geojson')
 
     lidar_folderpath      = Path('data/tiles/lidar/')
     mnt_folderpath        = Path('data/tiles/mnt')
     schematic_folderpath  = Path('data/myschems')
     mcfunction_folderpath = Path('data/mcfunctions')
 
-    SEARCH_FOR_TILE_IN_ZONE = False
+    SEARCH_FOR_TILE_IN_ZONE = True
 
 
     # Minecraft parameters
@@ -332,7 +329,7 @@ if __name__=='__main__':
     }
     
 
-    # -------------------------- Optional: Download step ------------------------- #
+    # -------------------------- Download step ------------------------- #
     download_ign_available_tiles(lidar_tiles_available_filepath, 'point_cloud', FORCE_DOWNLOAD_LIDAR_CATALOG)
     download_ign_available_tiles(mnt_tiles_available_filepath,   'mnt',         FORCE_DOWNLOAD_LIDAR_CATALOG)
 
@@ -525,7 +522,6 @@ if __name__=='__main__':
         # --------------------------------- clean MNT -------------------------------- #
         logger.info("Cleaning MNT data...")
         mnt_array:np.ndarray = mnt.read(1)
-        mnt_array[0][0] = -9999.0
         
         def replace_errors_with_neighbor_mean(arr):
             """Replace -9999.0 values with mean of valid neighbors (8-connected)."""
