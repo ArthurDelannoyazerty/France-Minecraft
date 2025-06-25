@@ -1,210 +1,269 @@
 import overpy
 import json
 from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon
-
-
 import rasterio
 from rasterio.features import rasterize
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import rasterio.transform
+import numpy as np
 
 
+# --- Configuration Constants ---
+GEOJSON_FILEPATH = Path("data/zone_test_caussol.geojson")
+TARGET_CRS = "EPSG:2154"  # Lambert-93, a projected CRS in meters
+RASTER_RESOLUTION_METERS = 1.0  # 1 meter resolution
 
-
-
-geojson_filepath = Path("data/zone_test_caussol.geojson")
-poly = json.loads(open(geojson_filepath).read())["features"][0]["geometry"]
-coords = poly["coordinates"][0]
-poly_str = " ".join(f"{lat} {lon}" for lon, lat in coords)
-
-query = f"""
-    [out:json][timeout:60];
-    (
-    // LAND COVER & NATURAL FEATURES
-    way["natural"~"^(sand|glacier|bare_rock|rock|scrub|heath|wood|grassland|wetland|shingle)$"](poly:"{poly_str}");
-    way["landuse"~"^(forest|farmland|meadow|grass|quarry|residential|industrial|recreation_ground)$"](poly:"{poly_str}");
-
-    // SURFACE TYPES (from roads, paths, etc.)
-    way["surface"~"^(dirt|gravel|sand|grass|mud|paved|asphalt)$"](poly:"{poly_str}");
-
-    // Also include similar tags on relations
-    relation["natural"](poly:"{poly_str}");
-    relation["landuse"](poly:"{poly_str}");
-    );
-    out body;
-    >;
-    out skel qt;
-"""
-
-api = overpy.Overpass()
-res = api.query(query)
-
-
-
-
-features = []
-for way in res.ways:
-    tags = way.tags
-    if any(k in tags for k in ("landuse", "natural", "surface")):
-        nodes = way.nodes
-        if len(nodes) < 2:
-            continue
-        
-        way_coords = [(float(n.lon), float(n.lat)) for n in nodes]
-        
-        # If the way is closed, treat it as a Polygon
-        if len(way_coords) > 3 and way_coords[0] == way_coords[-1]:
-            geom = Polygon(way_coords)
-        else:
-            geom = LineString(way_coords)
-        features.append({"geometry": geom, **tags})
-
-# --- Feature Categorization and Value Assignment ---
 
 # Define a mapping from specific tags to integer values
 # Higher values will be drawn on top (last in rasterize, brighter in colormap)
-feature_value_map = {
-    "natural": {
-        "sand": 1, "glacier": 2, "bare_rock": 3, "rock": 4, "scrub": 5,
-        "heath": 6, "wood": 7, "grassland": 8, "wetland": 9, "shingle": 10,
-    },
-    "landuse": {
-        "forest": 11, "farmland": 12, "meadow": 13, "grass": 14, "quarry": 15,
-        "residential": 16, "industrial": 17, "recreation_ground": 18,
-    },
-    "surface": {
-        "dirt": 21, "gravel": 22, "sand": 23, "grass": 24, "mud": 25,
-        "paved": 26, "asphalt": 27,
-    }
+# Values start from 1, as 0 is reserved for background/unclassified
+FEATURE_VALUE_MAP = {
+    "natural": {"sand": 1, "glacier": 2, "bare_rock": 3, "rock": 4, "scrub": 5,
+                "heath": 6, "wood": 7, "grassland": 8, "wetland": 9, "shingle": 10},
+    "landuse": {"forest": 11, "farmland": 12, "meadow": 13, "grass": 14, "quarry": 15,
+                "residential": 16, "industrial": 17, "recreation_ground": 18},
+    "surface": {"dirt": 21, "gravel": 22, "sand": 23, "grass": 24, "mud": 25,
+                "paved": 26, "asphalt": 27}
 }
 
 # Define a priority for tag types (surface should be on top)
-tag_type_priority = ["surface", "landuse", "natural"]
+TAG_TYPE_PRIORITY = ["surface", "landuse", "natural"]
 
-def get_feature_value(row):
+
+def build_overpass_query(polygon: Polygon) -> str:
     """
-    Assigns a numerical value to a feature based on its tags and a defined priority.
+    Builds an Overpass QL query string for natural, landuse, and surface features
+    within a given polygon.
     """
-    for tag_type in tag_type_priority:
-        # Check if the row has this tag_type as a column and its value is in our map
-        if tag_type in row and row[tag_type] in feature_value_map[tag_type]:
-            return feature_value_map[tag_type][row[tag_type]]
-    return 0 # Default for unknown or unclassified features
+    coords = polygon.exterior.coords
+    # Overpass expects "lat lon" pairs, so swap x, y from shapely (lon, lat)
+    poly_str = " ".join(f"{lat} {lon}" for lon, lat in coords)
 
-gdf = gpd.GeoDataFrame(features, crs="EPSG:4326")
-# Apply this function to create a 'value' column in the GeoDataFrame
-gdf['value'] = gdf.apply(get_feature_value, axis=1)
+    query = f"""
+        [out:json][timeout:60];
+        (
+        // LAND COVER & NATURAL FEATURES
+        way["natural"~"^(sand|glacier|bare_rock|rock|scrub|heath|wood|grassland|wetland|shingle)$"](poly:"{poly_str}");
+        way["landuse"~"^(forest|farmland|meadow|grass|quarry|residential|industrial|recreation_ground)$"](poly:"{poly_str}");
 
-# Sort the GeoDataFrame by the 'value' column to ensure correct z-ordering during rasterization
-gdf = gdf.sort_values(by='value', ascending=True)
+        // SURFACE TYPES (from roads, paths, etc.)
+        way["surface"~"^(dirt|gravel|sand|grass|mud|paved|asphalt)$"](poly:"{poly_str}");
 
+        // Also include similar tags on relations
+        relation["natural"](poly:"{poly_str}");
+        relation["landuse"](poly:"{poly_str}");
+        );
+        out body;
+        >;
+        out skel qt;
+    """
 
-
-
-# --- Rasterization and Display ---
-
-# 1. Determine bounds and resolution for the raster
-bounds = gdf.total_bounds
-width = bounds[2] - bounds[0]
-height = bounds[3] - bounds[1]
-resolution = 0.0001  # Adjust as needed for desired resolution
-out_shape = (int(height / resolution), int(width / resolution))
-
-# 2. Create the affine transform
-transform = rasterio.transform.from_bounds(
-    west=bounds[0],
-    south=bounds[1],
-    east=bounds[2],
-    north=bounds[3],
-    width=out_shape[1],
-    height=out_shape[0],
-)
-
-# 3. Rasterize the geometries
-#    Assign the numerical 'value' to areas covered by features, 0 otherwise.
-raster = rasterize( # type: ignore
-    [(feature.geometry, feature['value']) for idx, feature in gdf.iterrows()],
-    out_shape=out_shape,
-    transform=transform,
-    fill=0,
-    all_touched=True  # Include all pixels touched by geometries
-)
+    return query
 
 
-# --- Custom Colormap and Display ---
-
-# Example colors (you'd want to refine these for better visual distinction)
-# Ensure the list is long enough for all assigned values (up to max_value)
-colors_list = [
-    (0, 0, 0, 0), # Value 0 (transparent or background)
-    # Natural (1-10) - earthy/natural tones
-    (0.8, 0.8, 0.6), # sand (light brown)
-    (0.9, 0.9, 0.9), # glacier (white)
-    (0.5, 0.5, 0.5), # bare_rock (grey)
-    (0.4, 0.4, 0.4), # rock (dark grey)
-    (0.6, 0.7, 0.5), # scrub (light green)
-    (0.7, 0.8, 0.6), # heath (pale green)
-    (0.2, 0.5, 0.2), # wood (dark green)
-    (0.6, 0.8, 0.4), # grassland (medium green)
-    (0.4, 0.6, 0.8), # wetland (light blue)
-    (0.7, 0.7, 0.7), # shingle (grey-white)
-    # Landuse (11-20) - more human-influenced/broader categories
-    (0.1, 0.4, 0.1), # forest (darker green)
-    (0.8, 0.7, 0.3), # farmland (yellow-brown)
-    (0.5, 0.7, 0.3), # meadow (vibrant green)
-    (0.4, 0.6, 0.2), # grass (landuse) (medium green)
-    (0.7, 0.7, 0.7), # quarry (light grey)
-    (0.9, 0.4, 0.4), # residential (light red)
-    (0.6, 0.3, 0.3), # industrial (dark red)
-    (0.4, 0.8, 0.8), # recreation_ground (cyan)
-    # Surface (21-30) - road/path colors (should be distinct and on top)
-    (0.6, 0.4, 0.2), # dirt (brown)
-    (0.5, 0.5, 0.5), # gravel (medium grey)
-    (0.8, 0.8, 0.6), # sand (surface) (light brown)
-    (0.4, 0.6, 0.2), # grass (surface) (medium green)
-    (0.5, 0.3, 0.1), # mud (dark brown)
-    (0.3, 0.3, 0.3), # paved (darker grey)
-    (0.2, 0.2, 0.2), # asphalt (very dark grey)
-]
-
-# Ensure the list is long enough for all values, fill with black if not enough
-max_value = max(v for d in feature_value_map.values() for v in d.values())
-while len(colors_list) <= max_value:
-    colors_list.append((0, 0, 0, 1)) # Default to black for unassigned values
+def query_overpass(query: str) -> overpy.Result:
+    """Executes an Overpass QL query and returns the result."""
+    api = overpy.Overpass()
+    return api.query(query)
 
 
+def process_overpass_result(result: overpy.Result) -> gpd.GeoDataFrame:
+    """
+    Processes Overpass API result to extract geometries and tags into a GeoDataFrame.
+    """
+    features = []
+    for way in result.ways:
+        tags = way.tags
+        # Only include ways that have at least one of our target tag types
+        if any(k in tags for k in TAG_TYPE_PRIORITY):
+            nodes = way.nodes
+            if len(nodes) < 2:
+                continue
+
+            way_coords = [(float(n.lon), float(n.lat)) for n in nodes]
+
+            # If the way is closed, treat it as a Polygon, otherwise as a LineString
+            if len(way_coords) > 3 and way_coords[0] == way_coords[-1]:
+                geom = Polygon(way_coords)
+            else:
+                geom = LineString(way_coords)
+            features.append({"geometry": geom, **tags})
+
+    if not features:
+        print("No features found in Overpass response.")
+        return gpd.GeoDataFrame(columns=['geometry'], crs="EPSG:4326")
+
+    return gpd.GeoDataFrame(features, crs="EPSG:4326")
 
 
-# 4. Display the raster
-fig, ax = plt.subplots(figsize=(12, 12)) # Make figure slightly larger for colorbar
-extent = [bounds[0], bounds[2], bounds[1], bounds[3]]  # for matplotlib's imshow
-# Create a custom colormap from the defined colors
-custom_cmap = mcolors.ListedColormap(colors_list)
+def assign_feature_values(
+    gdf: gpd.GeoDataFrame, feature_map: Dict[str, Dict[str, int]], priority: List[str]
+) -> gpd.GeoDataFrame:
+    """
+    Assigns a numerical value to each feature based on its tags and a defined priority.
+    """
 
-im = ax.imshow(raster, extent=extent, cmap=custom_cmap, vmin=0, vmax=max_value)
-ax.set_title("Rasterized Features by Type")
-ax.set_xlabel("Longitude")
-ax.set_ylabel("Latitude")
+    def _get_value(row: Dict[str, Any]) -> int:
+        for tag_type in priority:
+            if tag_type in row and row[tag_type] in feature_map.get(tag_type, {}):
+                return feature_map[tag_type][row[tag_type]]
+        return 0  # Default for unknown or unclassified features
 
-# Add a colorbar to explain the colors
-# Build the reverse mapping for colorbar labels
-colorbar_labels_map = {}
-for tag_type, values_dict in feature_value_map.items():
-    for tag_value, int_id in values_dict.items():
-        colorbar_labels_map[int_id] = tag_value # Use the specific tag value as label
+    gdf['value'] = gdf.apply(_get_value, axis=1)
+    # Sort by value to ensure correct z-ordering during rasterization (lower values first)
+    return gdf.sort_values(by='value', ascending=True)
 
-# Get unique assigned values (excluding 0 for background)
-unique_assigned_values = sorted([v for v in gdf['value'].unique() if v != 0])
 
-# Prepare colorbar ticks and labels
-cbar_ticks = unique_assigned_values
-cbar_tick_labels = [colorbar_labels_map.get(v, 'Unknown') for v in unique_assigned_values]
+def rasterize_geometries(
+    gdf: gpd.GeoDataFrame, resolution_meters: float, target_crs: str
+) -> Tuple[np.ndarray, List[float], rasterio.transform.Affine]:
+    """
+    Rasterizes GeoDataFrame geometries to a specified resolution in a target CRS.
+    Returns the raster array, its extent, and the affine transform.
+    """
+    if gdf.empty:
+        print("GeoDataFrame is empty, cannot rasterize.")
+        return np.array([]), [], rasterio.transform.Affine.identity()
 
-cbar = fig.colorbar(im, ax=ax, ticks=cbar_ticks, orientation='vertical', shrink=0.75)
-cbar.ax.set_yticklabels(cbar_tick_labels)
-cbar.set_label('Feature Type')
+    # Reproject to a projected CRS for meter-based resolution
+    gdf_proj = gdf.to_crs(target_crs)
 
-plt.show()
+    # Determine bounds and shape for the raster in the projected CRS
+    bounds_proj = gdf_proj.total_bounds
+    minx, miny, maxx, maxy = bounds_proj
+
+    width_proj = maxx - minx
+    height_proj = maxy - miny
+
+    out_shape = (int(np.ceil(height_proj / resolution_meters)),
+                 int(np.ceil(width_proj / resolution_meters)))
+
+    # Create the affine transform for the projected CRS
+    transform = rasterio.transform.from_bounds(
+        west=minx,
+        south=miny,
+        east=maxx,
+        north=maxy,
+        width=out_shape[1],
+        height=out_shape[0],
+    )
+
+    # Rasterize the geometries using their assigned 'value'
+    raster = rasterize(
+        [(geom, value) for geom, value in zip(gdf_proj.geometry, gdf_proj['value'])],
+        out_shape=out_shape,
+        transform=transform,
+        fill=0,  # Default value for areas not covered by features
+        all_touched=True,  # Include all pixels touched by geometries
+    )
+
+    extent = [minx, maxx, miny, maxy]
+    return raster, extent, transform
+
+
+def create_custom_colormap(feature_map: Dict[str, Dict[str, int]]) -> mcolors.ListedColormap:
+    """
+    Creates a custom colormap based on the feature value map.
+    """
+    # Example colors (you'd want to refine these for better visual distinction)
+    # Ensure the list is long enough for all assigned values (up to max_value)
+    colors_list = [
+        (0, 0, 0, 0),  # Value 0 (transparent or background)
+        # Natural (1-10) - earthy/natural tones
+        (0.8, 0.8, 0.6), (0.9, 0.9, 0.9), (0.5, 0.5, 0.5), (0.4, 0.4, 0.4), (0.6, 0.7, 0.5),
+        (0.7, 0.8, 0.6), (0.2, 0.5, 0.2), (0.6, 0.8, 0.4), (0.4, 0.6, 0.8), (0.7, 0.7, 0.7),
+        # Landuse (11-20) - more human-influenced/broader categories
+        (0.1, 0.4, 0.1), (0.8, 0.7, 0.3), (0.5, 0.7, 0.3), (0.4, 0.6, 0.2), (0.7, 0.7, 0.7),
+        (0.9, 0.4, 0.4), (0.6, 0.3, 0.3), (0.4, 0.8, 0.8), (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), # Placeholder for 19, 20
+        # Surface (21-30) - road/path colors (should be distinct and on top)
+        (0.6, 0.4, 0.2), (0.5, 0.5, 0.5), (0.8, 0.8, 0.6), (0.4, 0.6, 0.2), (0.5, 0.3, 0.1),
+        (0.3, 0.3, 0.3), (0.2, 0.2, 0.2),
+    ]
+
+    # Ensure the list is long enough for all values, fill with black if not enough
+    max_value = max(v for d in feature_map.values() for v in d.values())
+    while len(colors_list) <= max_value:
+        colors_list.append((0, 0, 0, 1))  # Default to black for unassigned values
+
+    return mcolors.ListedColormap(colors_list)
+
+
+def display_raster(
+    raster: np.ndarray, extent: List[float], custom_cmap: mcolors.ListedColormap,
+    feature_map: Dict[str, Dict[str, int]], resolution_meters: float
+) -> None:
+    """
+    Displays the rasterized features with a custom colormap and colorbar.
+    """
+    if raster.size == 0:
+        print("No raster data to display.")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 12))
+    max_value = max(v for d in feature_map.values() for v in d.values())
+
+    im = ax.imshow(raster, extent=extent, cmap=custom_cmap, vmin=0, vmax=max_value)
+    ax.set_title(f"Rasterized Features (Resolution: {resolution_meters}m)")
+    ax.set_xlabel("Easting (meters)")
+    ax.set_ylabel("Northing (meters)")
+
+    # Build the reverse mapping for colorbar labels
+    colorbar_labels_map = {}
+    for tag_type, values_dict in feature_map.items():
+        for tag_value, int_id in values_dict.items():
+            colorbar_labels_map[int_id] = f"{tag_type}: {tag_value}"
+
+    # Prepare colorbar ticks and labels
+    unique_assigned_values = sorted(np.unique(raster).tolist())
+    # Filter out 0 (background) if present
+    unique_assigned_values = [v for v in unique_assigned_values if v != 0]
+
+    cbar_ticks = unique_assigned_values
+    cbar_tick_labels = [colorbar_labels_map.get(v, 'Unknown') for v in unique_assigned_values]
+
+    cbar = fig.colorbar(im, ax=ax, ticks=cbar_ticks, orientation='vertical', shrink=0.75)
+    cbar.ax.set_yticklabels(cbar_tick_labels)
+    cbar.set_label('Feature Type')
+
+    plt.savefig('rasterized_features.png', dpi=300, bbox_inches='tight')
+
+
+def main():
+    """
+    Main function to orchestrate the process of fetching, processing,
+    rasterizing, and displaying OSM data.
+    """
+    # 1. Load polygon from GeoJSON
+    with open(GEOJSON_FILEPATH, 'r') as f:
+        poly_data = json.load(f)["features"][0]["geometry"]
+    polygon = Polygon(poly_data["coordinates"][0])
+
+    # 2. Build and execute Overpass query
+    query = build_overpass_query(polygon)
+    overpass_result = query_overpass(query)
+
+    # 3. Process Overpass result into a GeoDataFrame
+    gdf = process_overpass_result(overpass_result)
+
+    # 4. Assign numerical values to features
+    gdf = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
+
+    # 5. Rasterize geometries
+    raster_array, extent, _ = rasterize_geometries(
+        gdf, RASTER_RESOLUTION_METERS, TARGET_CRS
+    )
+
+    # 6. Create custom colormap
+    custom_cmap = create_custom_colormap(FEATURE_VALUE_MAP)
+
+    # 7. Display the raster
+    display_raster(raster_array, extent, custom_cmap, FEATURE_VALUE_MAP, RASTER_RESOLUTION_METERS)
+
+
+if __name__ == '__main__':
+    main()
