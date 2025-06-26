@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+import pyproj
+from shapely.ops import transform as shapely_transform
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon
@@ -325,6 +327,150 @@ def display_raster(
     plt.close(fig) # Close the figure to free up memory
 
 
+def _get_coordinates_from_geometry(geom, origin_x: float, origin_y: float) -> List[Tuple[float, float]]:
+    """
+    Extracts coordinates from a shapely geometry and makes them relative to an origin.
+    Handles LineString, Polygon, MultiPolygon.
+    """
+    coords = []
+    if geom.geom_type == 'LineString':
+        for x, y in geom.coords:
+            coords.append((x - origin_x, y - origin_y))
+    elif geom.geom_type == 'Polygon':
+        # Only exterior for now, could add interiors if needed
+        for x, y in geom.exterior.coords:
+            coords.append((x - origin_x, y - origin_y))
+    elif geom.geom_type == 'MultiPolygon':
+        for poly in geom.geoms:
+            for x, y in poly.exterior.coords:
+                coords.append((x - origin_x, y - origin_y))
+    return coords
+
+
+def get_road_coordinates_by_type(zone_geojson_filepath: Path) -> Dict[str, List[Tuple[float, float]]]:
+    """
+    Extracts road coordinates by type, relative to the zone's origin.
+
+    Args:
+        zone_geojson_filepath (Path): Path to the GeoJSON file defining the zone.
+
+    Returns:
+        Dict[str, List[Tuple[float, float]]]: Dictionary where keys are road types
+            and values are lists of (x, y) coordinates relative to the zone's origin.
+            If a road type is not found, its list of coordinates will be empty.
+    """
+    # Initialize the dictionary with all possible road types and empty lists
+    road_coords_by_type: Dict[str, List[Tuple[float, float]]] = {
+        road_type: [] for road_type in ROAD_WIDTH_MAP.keys()
+    }
+
+    # 1. Load and reproject polygon from GeoJSON
+    with open(zone_geojson_filepath, 'r') as f:
+        poly_data = json.load(f)["features"][0]["geometry"]
+    polygon_wgs84 = Polygon(poly_data["coordinates"][0])
+
+    # Reproject polygon to TARGET_CRS to get its bounds in meters
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True).transform
+    polygon_proj = shapely_transform(transformer, polygon_wgs84)
+
+    minx, miny, _, _ = polygon_proj.bounds
+
+    # 2. Query Overpass and process result
+    query = build_overpass_query(polygon_wgs84)
+    overpass_result = query_overpass(query)
+    gdf = process_overpass_result(overpass_result)
+
+    # 3. Assign feature values and buffer distances
+    gdf_with_values = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
+
+    # 4. Filter for roads and reproject to TARGET_CRS
+    roads_gdf = gdf_with_values[gdf_with_values['highway'].notna()].to_crs(TARGET_CRS)
+
+    # 5. Extract and store coordinates
+    for _, row in roads_gdf.iterrows():
+        highway_type = row['highway']
+        geom = row.geometry
+        buffer_dist = row.get('buffer_distance', 0.0)
+
+        # Apply buffering for LineStrings to represent road width
+        if isinstance(geom, LineString) and buffer_dist > 0:
+            buffered_geom = geom.buffer(buffer_dist, cap_style=3, join_style=3)
+            # If buffering results in MultiPolygon, iterate through its parts
+            if buffered_geom.geom_type == 'MultiPolygon':
+                for single_poly in buffered_geom.geoms:
+                    road_coords_by_type[highway_type].extend(_get_coordinates_from_geometry(single_poly, minx, miny))
+            else:
+                road_coords_by_type[highway_type].extend(_get_coordinates_from_geometry(buffered_geom, minx, miny))
+        elif geom: # For other geometry types (e.g., existing Polygons with highway tag) or no buffer
+            road_coords_by_type[highway_type].extend(_get_coordinates_from_geometry(geom, minx, miny))
+
+    return road_coords_by_type
+
+
+def get_terrain_coordinates_by_type(zone_geojson_filepath: Path) -> Dict[str, List[Tuple[float, float]]]:
+    """
+    Extracts terrain coordinates by type, relative to the zone's origin.
+
+    Args:
+        zone_geojson_filepath (Path): Path to the GeoJSON file defining the zone.
+
+    Returns:
+        Dict[str, List[Tuple[float, float]]]: Dictionary where keys are terrain types
+            (natural, landuse, surface) and values are lists of (x, y) coordinates
+            relative to the zone's origin. If a terrain type is not found, its list
+            of coordinates will be empty.
+    """
+    # Initialize the dictionary with all possible terrain types and empty lists
+    terrain_coords_by_type: Dict[str, List[Tuple[float, float]]] = {}
+    for tag_type in ["natural", "landuse", "surface"]:
+        for terrain_type in FEATURE_VALUE_MAP.get(tag_type, {}).keys():
+            terrain_coords_by_type[terrain_type] = []
+
+    # 1. Load and reproject polygon from GeoJSON
+    with open(zone_geojson_filepath, 'r') as f:
+        poly_data = json.load(f)["features"][0]["geometry"]
+    polygon_wgs84 = Polygon(poly_data["coordinates"][0])
+
+    # Reproject polygon to TARGET_CRS to get its bounds in meters
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True).transform
+    polygon_proj = shapely_transform(transformer, polygon_wgs84)
+
+    minx, miny, _, _ = polygon_proj.bounds
+
+    # 2. Query Overpass and process result
+    query = build_overpass_query(polygon_wgs84)
+    overpass_result = query_overpass(query)
+    gdf = process_overpass_result(overpass_result)
+
+    # 3. Assign feature values (not strictly needed for terrain, but good for consistency)
+    gdf_with_values = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
+
+    # 4. Filter for terrain and reproject to TARGET_CRS
+    # Terrain is anything that is not a 'highway' type
+    terrain_gdf = gdf_with_values[gdf_with_values['highway'].isna()].to_crs(TARGET_CRS)
+
+    # 5. Extract and store coordinates
+    for _, row in terrain_gdf.iterrows():
+        # Determine the specific terrain type (e.g., 'forest', 'sand')
+        terrain_type = None
+        for tag_type in ["natural", "landuse", "surface"]:
+            if tag_type in row and row[tag_type] in FEATURE_VALUE_MAP.get(tag_type, {}):
+                terrain_type = row[tag_type]
+                break
+        
+        if terrain_type and terrain_type in terrain_coords_by_type:
+            geom = row.geometry
+            # For terrain, we generally don't buffer lines unless explicitly specified
+            # We just extract the coordinates of the geometry as is
+            if geom.geom_type == 'MultiPolygon':
+                for single_poly in geom.geoms:
+                    terrain_coords_by_type[terrain_type].extend(_get_coordinates_from_geometry(single_poly, minx, miny))
+            else:
+                terrain_coords_by_type[terrain_type].extend(_get_coordinates_from_geometry(geom, minx, miny))
+
+    return terrain_coords_by_type
+
+
 def main():
     """
     Main function to orchestrate the process of fetching, processing,
@@ -334,6 +480,30 @@ def main():
     print("Loading and reprojecting polygon from GeoJSON...")
     with open(GEOJSON_FILEPATH, 'r') as f:
         poly_data = json.load(f)["features"][0]["geometry"]
+
+    # Test get_coordinates functions
+    road_coords_by_type = get_road_coordinates_by_type(GEOJSON_FILEPATH)
+    print('ROAD COORDINATES:' + '-'*30)
+    for road_type, coords in road_coords_by_type.items():
+        print('-'*20)
+        print(f'{road_type}')
+        if len(coords) > 0:
+            print(f'\tSize: {len(coords)}  |  minx: {min(coord[0] for coord in coords)}  |  miny: {min(coord[1] for coord in coords)} | maxx: {max(coord[0] for coord in coords)}  |  maxy: {max(coord[1] for coord in coords)}')
+        else:
+            print(f'\tSize: {len(coords)}')
+    
+    terrain_coords_by_type = get_terrain_coordinates_by_type(GEOJSON_FILEPATH)
+    print('TERRAIN COORDINATES:' + '-'*30)
+    for terrain_type, coords in terrain_coords_by_type.items():
+        print('-'*20)
+        print(f'{terrain_type}')
+        if len(coords) > 0:
+            print(f'\tSize: {len(coords)}  |  minx: {min(coord[0] for coord in coords)}  |  miny: {min(coord[1] for coord in coords)} | maxx: {max(coord[0] for coord in coords)}  |  maxy: {max(coord[1] for coord in coords)}')
+        else:
+            print(f'\tSize: {len(coords)}')
+
+    exit(0)
+
 
     # Create a GeoSeries from the polygon to handle reprojection easily
     # The input GeoJSON is assumed to be in WGS84 (EPSG:4326)
