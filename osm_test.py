@@ -177,6 +177,7 @@ def rasterize_geometries(
     gdf: gpd.GeoDataFrame, 
     resolution_meters: float, 
     target_crs: str,
+    clip_polygon_proj: Polygon, # New parameter for clipping
 ) -> Tuple[np.ndarray, List[float], rasterio.transform.Affine]:
     """
     Rasterizes GeoDataFrame geometries to a specified resolution in a target CRS.
@@ -189,27 +190,16 @@ def rasterize_geometries(
     # Reproject to a projected CRS for meter-based resolution
     gdf_proj = gdf.to_crs(target_crs)
 
-        # Prepare geometries for rasterization, applying buffer if necessary
-    geometries_to_rasterize = []
-    for idx, row in gdf_proj.iterrows():
-        geom = row.geometry
-        value = row['value']
-        # Check if 'buffer_distance' column exists and get its value, default to 0.0
-        buffer_dist = row.get('buffer_distance', 0.0)
+    # Clip the GeoDataFrame to the exact bounds of the input polygon
+    # This ensures that only relevant geometries are considered for rasterization
+    gdf_proj_clipped = gdf_proj.clip(clip_polygon_proj)
 
-        if isinstance(geom, LineString) and buffer_dist > 0:
-            # Buffer the LineString to create a Polygon representing the road width
-            # cap_style=3 (square) and join_style=3 (bevel) are often good for roads
-            buffered_geom = geom.buffer(buffer_dist, cap_style=3, join_style=3)
-            geometries_to_rasterize.append((buffered_geom, value))
-        else:
-            # Use original geometry for Polygons or LineStrings without buffer_distance
-            geometries_to_rasterize.append((geom, value))
+    if gdf_proj_clipped.empty:
+        print("GeoDataFrame is empty after clipping, cannot rasterize.")
+        return np.array([]), [], rasterio.transform.Affine.identity()
 
-
-    # Determine bounds and shape for the raster in the projected CRS
-    bounds_proj = gdf_proj.total_bounds
-    minx, miny, maxx, maxy = bounds_proj
+    # Use the bounds of the clip_polygon_proj to define the raster extent
+    minx, miny, maxx, maxy = clip_polygon_proj.bounds
 
     width_proj = maxx - minx
     height_proj = maxy - miny
@@ -217,7 +207,8 @@ def rasterize_geometries(
     out_shape = (int(np.ceil(height_proj / resolution_meters)),
                  int(np.ceil(width_proj / resolution_meters)))
 
-    # Create the affine transform for the projected CRS
+    # Create the affine transform for the projected CRS based on the clip_polygon_proj bounds
+    geometries_to_rasterize = []
     transform = rasterio.transform.from_bounds(
         west=minx,
         south=miny,
@@ -226,6 +217,21 @@ def rasterize_geometries(
         width=out_shape[1],
         height=out_shape[0],
     )
+
+    # Prepare geometries for rasterization, applying buffer if necessary
+    # Iterate over the *clipped* GeoDataFrame
+    for idx, row in gdf_proj_clipped.iterrows():
+        geom = row.geometry
+        value = row['value']
+        # Check if 'buffer_distance' column exists and get its value, default to 0.0
+        buffer_dist = row.get('buffer_distance', 0.0)
+
+        if isinstance(geom, LineString) and buffer_dist > 0:
+            # Buffer the LineString to create a Polygon representing the road width
+            buffered_geom = geom.buffer(buffer_dist, cap_style=3, join_style=3)
+            geometries_to_rasterize.append((buffered_geom, value))
+        else:
+            geometries_to_rasterize.append((geom, value))
 
     # Rasterize the geometries using their assigned 'value'
     raster = rasterize(
@@ -325,10 +331,20 @@ def main():
     rasterizing, and displaying OSM data.
     """
     # 1. Load polygon from GeoJSON
-    print("Loading polygon from GeoJSON...")
+    print("Loading and reprojecting polygon from GeoJSON...")
     with open(GEOJSON_FILEPATH, 'r') as f:
         poly_data = json.load(f)["features"][0]["geometry"]
-    polygon = Polygon(poly_data["coordinates"][0])
+
+    # Create a GeoSeries from the polygon to handle reprojection easily
+    # The input GeoJSON is assumed to be in WGS84 (EPSG:4326)
+    polygon_wgs84 = Polygon(poly_data["coordinates"][0])
+    poly_gs = gpd.GeoSeries([polygon_wgs84], crs="EPSG:4326")
+
+    # Reproject the polygon to the target CRS to be used for clipping
+    poly_gs_proj = poly_gs.to_crs(TARGET_CRS)
+    polygon_proj = poly_gs_proj.iloc[0]
+
+    polygon = polygon_wgs84 # Use original WGS84 polygon for Overpass query
 
     # 2. Create a combined Overpass query for both features and roads
     print("Building Overpass queries...")
@@ -337,6 +353,7 @@ def main():
 
     # 3. Process Overpass result into a GeoDataFrame
     gdf = process_overpass_result(overpass_result)
+
 
     # 4. Assign numerical values to features
     print("Assigning feature values based on priority and mapping...")
@@ -348,15 +365,15 @@ def main():
 
     # 5. Rasterize geometries
     print("Rasterizing all features...")
-    raster_array, extent, _ = rasterize_geometries(gdf_with_values, RASTER_RESOLUTION_METERS, TARGET_CRS)
+    raster_array, extent, _ = rasterize_geometries(gdf_with_values, RASTER_RESOLUTION_METERS, TARGET_CRS, polygon_proj)
     print("Rasterizing roads...")
-    raster_array_roads, extent_roads, _ = rasterize_geometries(roads_gdf, RASTER_RESOLUTION_METERS, TARGET_CRS)
+    raster_array_roads, extent_roads, _ = rasterize_geometries(roads_gdf, RASTER_RESOLUTION_METERS, TARGET_CRS, polygon_proj)
     print("Rasterizing terrain...")
-    raster_array_terrain, extent_terrain, _ = rasterize_geometries(terrain_gdf, RASTER_RESOLUTION_METERS, TARGET_CRS)
+    raster_array_terrain, extent_terrain, _ = rasterize_geometries(terrain_gdf, RASTER_RESOLUTION_METERS, TARGET_CRS, polygon_proj)
 
     # 6. Create custom colormap
     custom_cmap = create_custom_colormap(FEATURE_VALUE_MAP)
-
+    
 
     # 7. Display the raster
     print("Displaying raster for all features...")
