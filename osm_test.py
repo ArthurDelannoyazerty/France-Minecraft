@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+import pandas as pd
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon
 import rasterio
@@ -14,7 +15,7 @@ import numpy as np
 
 
 # --- Configuration Constants ---
-GEOJSON_FILEPATH = Path("data/zone_test_caussol.geojson")
+GEOJSON_FILEPATH = Path("data/zone_test.geojson")
 TARGET_CRS = "EPSG:2154"  # Lambert-93, a projected CRS in meters
 RASTER_RESOLUTION_METERS = 1.0  # 1 meter resolution
 
@@ -29,10 +30,45 @@ FEATURE_VALUE_MAP = {
                 "residential": 16, "industrial": 17, "recreation_ground": 18},
     "highway": {"motorway": 31, "trunk": 32, "primary": 33, "secondary": 34, "tertiary": 35,
                 "unclassified": 36, "residential": 37, "service": 38, "living_street": 39,
-                "pedestrian": 40, "footway": 41, "cycleway": 42, "path": 43},
+                "pedestrian": 40, "footway": 41, "cycleway": 42, "path": 43,
+                "track": 44, "steps": 45, "bridleway": 46, "raceway": 47,
+                "bus_guideway": 48, "corridor": 49, "elevator": 50, "escalator": 51,
+                "platform": 52, "proposed": 53, "construction": 54},
     "surface": {"dirt": 21, "gravel": 22, "sand": 23, "grass": 24, "mud": 25,
                 "paved": 26, "asphalt": 27}
 }
+
+
+# Typical real-world widths in meters for different highway types
+# These values are approximate and can be adjusted
+ROAD_WIDTH_MAP = {
+    "motorway": 20.0,  # Multi-lane highway, including median
+    "trunk": 15.0,     # Major non-motorway road
+    "primary": 12.0,
+    "secondary": 10.0,
+    "tertiary": 8.0,
+    "unclassified": 6.0,
+    "residential": 5.0,
+    "service": 4.0,
+    "living_street": 4.0,
+    "pedestrian": 3.0,
+    "footway": 2.0,
+    "cycleway": 2.5,
+    "path": 2.0,
+    "track": 3.0,
+    "steps": 1.5,
+    "bridleway": 2.0,
+    "raceway": 15.0, # Varies greatly, this is a general estimate
+    "bus_guideway": 5.0,
+    "corridor": 3.0,
+    "elevator": 1.5,
+    "escalator": 2.0,
+    "platform": 5.0, # Varies, e.g., train platform
+    "proposed": 5.0, # Default for proposed roads
+    "construction": 5.0 # Default for roads under construction
+}
+
+
 
 # Define a priority for tag types (highways on top, then surface, etc.)
 TAG_TYPE_PRIORITY = ["highway", "surface", "landuse", "natural"]
@@ -105,9 +141,9 @@ def process_overpass_result(result: overpy.Result) -> gpd.GeoDataFrame:
 
     return gpd.GeoDataFrame(features, crs="EPSG:4326")
 
-def filter_out_roads(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Filters out the road types"""
-    return gdf[~gdf['highway'].isin(FEATURE_VALUE_MAP.get('highway', {}).keys())].copy()
+# def filter_out_roads(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+#     """Filters out the road types"""
+#     return gdf[~gdf['highway'].isin(FEATURE_VALUE_MAP.get('highway', {}).keys())].copy()
 
 
 def assign_feature_values(
@@ -115,15 +151,24 @@ def assign_feature_values(
 ) -> gpd.GeoDataFrame:
     """
     Assigns a numerical value to each feature based on its tags and a defined priority.
+    Also assigns a 'buffer_distance' for highway types.
     """
 
-    def _get_value(row: Dict[str, Any]) -> int:
+    def _get_value_and_buffer_distance(row: Dict[str, Any]) -> Tuple[int, float]:
+        value = 0
+        buffer_dist = 0.0 # Default no buffer
         for tag_type in priority: # Iterate through tag types based on priority
             if tag_type in row and row[tag_type] in feature_map.get(tag_type, {}): # Check if tag exists in row and in the feature_map
-                return feature_map[tag_type][row[tag_type]] # Return the mapped integer value
-        return 0  # Default for unknown or unclassified features
+                value = feature_map[tag_type][row[tag_type]]
+                # If it's a highway, get its width and calculate buffer distance (radius)
+                if tag_type == "highway" and row[tag_type] in ROAD_WIDTH_MAP:
+                    buffer_dist = ROAD_WIDTH_MAP[row[tag_type]] / 2.0
+                break # Found the highest priority tag, stop searching
 
-    gdf['value'] = gdf.apply(_get_value, axis=1)
+        return value, buffer_dist
+
+    # Apply the function to get both value and buffer_distance
+    gdf[['value', 'buffer_distance']] = gdf.apply(lambda row: pd.Series(_get_value_and_buffer_distance(row)), axis=1)
     # Sort by value to ensure correct z-ordering during rasterization (lower values first)
     return gdf.sort_values(by='value', ascending=True)
 
@@ -132,7 +177,6 @@ def rasterize_geometries(
     gdf: gpd.GeoDataFrame, 
     resolution_meters: float, 
     target_crs: str,
-    invert: bool = False # False = terrain ; True = road
 ) -> Tuple[np.ndarray, List[float], rasterio.transform.Affine]:
     """
     Rasterizes GeoDataFrame geometries to a specified resolution in a target CRS.
@@ -144,6 +188,24 @@ def rasterize_geometries(
 
     # Reproject to a projected CRS for meter-based resolution
     gdf_proj = gdf.to_crs(target_crs)
+
+        # Prepare geometries for rasterization, applying buffer if necessary
+    geometries_to_rasterize = []
+    for idx, row in gdf_proj.iterrows():
+        geom = row.geometry
+        value = row['value']
+        # Check if 'buffer_distance' column exists and get its value, default to 0.0
+        buffer_dist = row.get('buffer_distance', 0.0)
+
+        if isinstance(geom, LineString) and buffer_dist > 0:
+            # Buffer the LineString to create a Polygon representing the road width
+            # cap_style=3 (square) and join_style=3 (bevel) are often good for roads
+            buffered_geom = geom.buffer(buffer_dist, cap_style=3, join_style=3)
+            geometries_to_rasterize.append((buffered_geom, value))
+        else:
+            # Use original geometry for Polygons or LineStrings without buffer_distance
+            geometries_to_rasterize.append((geom, value))
+
 
     # Determine bounds and shape for the raster in the projected CRS
     bounds_proj = gdf_proj.total_bounds
@@ -167,7 +229,7 @@ def rasterize_geometries(
 
     # Rasterize the geometries using their assigned 'value'
     raster = rasterize(
-        [(geom, value) for geom, value in zip(gdf_proj.geometry, gdf_proj['value'])],
+        geometries_to_rasterize, # Use the list of (buffered_geom, value)
         out_shape=out_shape,
         transform=transform,
         fill=0,  # Default value for areas not covered by features
@@ -193,7 +255,11 @@ def create_custom_colormap(feature_map: Dict[str, Dict[str, int]]) -> mcolors.Li
         # Landuse (11-20) - more human-influenced/broader categories
         (0.1, 0.4, 0.1), (0.8, 0.7, 0.3), (0.5, 0.7, 0.3), (0.4, 0.6, 0.2), (0.7, 0.7, 0.7),
         (0.9, 0.4, 0.4), (0.6, 0.3, 0.3), (0.4, 0.8, 0.8), (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), # Placeholder for 19, 20,
-        # Highway 31-43
+        # Surface (21-30) - road/path colors (should be distinct and on top)
+        (0.6, 0.4, 0.2), (0.5, 0.5, 0.5), (0.8, 0.8, 0.6), (0.4, 0.6, 0.2), (0.5, 0.3, 0.1),
+        (0.3, 0.3, 0.3), (0.2, 0.2, 0.2),
+        # Highway (31-54) - road colors, ensure enough distinct colors
+        # Values 31-35
         (0.4, 0.4, 0.4), (0.4, 0.4, 0.4), (0.5, 0.5, 0.5), (0.6, 0.6, 0.6), (0.7, 0.7, 0.7),
         # Surface (21-30) - road/path colors (should be distinct and on top)
         (0.6, 0.4, 0.2), (0.5, 0.5, 0.5), (0.8, 0.8, 0.6), (0.4, 0.6, 0.2), (0.5, 0.3, 0.1),
@@ -220,7 +286,7 @@ def display_raster(
     Displays the rasterized features with a custom colormap and colorbar.
     """
     if raster.size == 0:
-        print("No raster data to display.")
+        print(f"No raster data to display for {output_filepath}.") # Added for clarity
         return
 
     fig, ax = plt.subplots(figsize=(12, 12))
@@ -250,6 +316,7 @@ def display_raster(
     cbar.set_label('Feature Type')
 
     plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
+    plt.close(fig) # Close the figure to free up memory
 
 
 def main():
@@ -273,13 +340,18 @@ def main():
 
     # 4. Assign numerical values to features
     print("Assigning feature values based on priority and mapping...")
-    gdf = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
-    roads_gdf = gdf[gdf['value'] >= 31].copy()
-    terrain_gdf = filter_out_roads(gdf)  # Exclude road-related features for terrain
+    gdf_with_values = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
+
+    # Separate GeoDataFrames for roads and terrain based on the assigned values
+    roads_gdf = gdf_with_values[gdf_with_values['value'] >= 31].copy() # Roads are values >= 31
+    terrain_gdf = gdf_with_values[gdf_with_values['value'] < 31].copy() # Terrain is everything else
 
     # 5. Rasterize geometries
-    raster_array, extent, _ = rasterize_geometries(gdf, RASTER_RESOLUTION_METERS, TARGET_CRS)
+    print("Rasterizing all features...")
+    raster_array, extent, _ = rasterize_geometries(gdf_with_values, RASTER_RESOLUTION_METERS, TARGET_CRS)
+    print("Rasterizing roads...")
     raster_array_roads, extent_roads, _ = rasterize_geometries(roads_gdf, RASTER_RESOLUTION_METERS, TARGET_CRS)
+    print("Rasterizing terrain...")
     raster_array_terrain, extent_terrain, _ = rasterize_geometries(terrain_gdf, RASTER_RESOLUTION_METERS, TARGET_CRS)
 
     # 6. Create custom colormap
@@ -287,8 +359,11 @@ def main():
 
 
     # 7. Display the raster
+    print("Displaying raster for all features...")
     display_raster(raster_array,         extent,         custom_cmap, FEATURE_VALUE_MAP, RASTER_RESOLUTION_METERS, output_filepath="raster_all_features.png")
+    print("Displaying raster for roads...")
     display_raster(raster_array_roads,   extent_roads,   custom_cmap, FEATURE_VALUE_MAP, RASTER_RESOLUTION_METERS, output_filepath="raster_all_features_roads.png")
+    print("Displaying raster for terrain...")
     display_raster(raster_array_terrain, extent_terrain, custom_cmap, FEATURE_VALUE_MAP, RASTER_RESOLUTION_METERS, output_filepath="raster_all_features_terrain.png")
 
 
