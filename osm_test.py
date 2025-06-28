@@ -347,12 +347,12 @@ def _get_coordinates_from_geometry(geom, origin_x: float, origin_y: float) -> Li
     return coords
 
 
-def get_road_coordinates_by_type(zone_geojson_filepath: Path) -> Dict[str, List[Tuple[float, float]]]:
+def get_road_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple[float, float]]]:
     """
     Extracts road coordinates by type, relative to the zone's origin.
 
     Args:
-        zone_geojson_filepath (Path): Path to the GeoJSON file defining the zone.
+        polygon_wgs84 (Polygon): Polygon of the zone.
 
     Returns:
         Dict[str, List[Tuple[float, float]]]: Dictionary where keys are road types
@@ -364,12 +364,7 @@ def get_road_coordinates_by_type(zone_geojson_filepath: Path) -> Dict[str, List[
         road_type: [] for road_type in ROAD_WIDTH_MAP.keys()
     }
 
-    # 1. Load and reproject polygon from GeoJSON
-    with open(zone_geojson_filepath, 'r') as f:
-        poly_data = json.load(f)["features"][0]["geometry"]
-    polygon_wgs84 = Polygon(poly_data["coordinates"][0])
-
-    # Reproject polygon to TARGET_CRS to get its bounds in meters
+    # 1. Reproject polygon to TARGET_CRS to get its bounds in meters
     transformer = pyproj.Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True).transform
     polygon_proj = shapely_transform(transformer, polygon_wgs84)
 
@@ -407,12 +402,12 @@ def get_road_coordinates_by_type(zone_geojson_filepath: Path) -> Dict[str, List[
     return road_coords_by_type
 
 
-def get_terrain_coordinates_by_type(zone_geojson_filepath: Path) -> Dict[str, List[Tuple[float, float]]]:
+def get_terrain_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple[float, float]]]:
     """
     Extracts terrain coordinates by type, relative to the zone's origin.
 
     Args:
-        zone_geojson_filepath (Path): Path to the GeoJSON file defining the zone.
+        polygon_wgs84 (Polygon): Polygon of the zone.
 
     Returns:
         Dict[str, List[Tuple[float, float]]]: Dictionary where keys are terrain types
@@ -426,12 +421,7 @@ def get_terrain_coordinates_by_type(zone_geojson_filepath: Path) -> Dict[str, Li
         for terrain_type in FEATURE_VALUE_MAP.get(tag_type, {}).keys():
             terrain_coords_by_type[terrain_type] = []
 
-    # 1. Load and reproject polygon from GeoJSON
-    with open(zone_geojson_filepath, 'r') as f:
-        poly_data = json.load(f)["features"][0]["geometry"]
-    polygon_wgs84 = Polygon(poly_data["coordinates"][0])
-
-    # Reproject polygon to TARGET_CRS to get its bounds in meters
+    # 1. Reproject polygon to TARGET_CRS to get its bounds in meters
     transformer = pyproj.Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True).transform
     polygon_proj = shapely_transform(transformer, polygon_wgs84)
 
@@ -480,9 +470,10 @@ def main():
     print("Loading and reprojecting polygon from GeoJSON...")
     with open(GEOJSON_FILEPATH, 'r') as f:
         poly_data = json.load(f)["features"][0]["geometry"]
+    polygon_wgs84 = Polygon(poly_data["coordinates"][0])
 
     # Test get_coordinates functions
-    road_coords_by_type = get_road_coordinates_by_type(GEOJSON_FILEPATH)
+    road_coords_by_type = get_road_coordinates_by_type(polygon_wgs84)
     print('ROAD COORDINATES:' + '-'*30)
     for road_type, coords in road_coords_by_type.items():
         print('-'*20)
@@ -492,7 +483,7 @@ def main():
         else:
             print(f'\tSize: {len(coords)}')
     
-    terrain_coords_by_type = get_terrain_coordinates_by_type(GEOJSON_FILEPATH)
+    terrain_coords_by_type = get_terrain_coordinates_by_type(polygon_wgs84)
     print('TERRAIN COORDINATES:' + '-'*30)
     for terrain_type, coords in terrain_coords_by_type.items():
         print('-'*20)
@@ -507,7 +498,6 @@ def main():
 
     # Create a GeoSeries from the polygon to handle reprojection easily
     # The input GeoJSON is assumed to be in WGS84 (EPSG:4326)
-    polygon_wgs84 = Polygon(poly_data["coordinates"][0])
     poly_gs = gpd.GeoSeries([polygon_wgs84], crs="EPSG:4326")
 
     # Reproject the polygon to the target CRS to be used for clipping

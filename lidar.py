@@ -13,12 +13,13 @@ from typing import Dict, List, Tuple
 # NEW: Import warnings to suppress potential division-by-zero in IDW if needed
 
 
-from shapely.geometry import Polygon, shape
+from shapely.geometry import Polygon, shape, box
+from shapely.ops import transform
 from pathlib import Path
 from utils.logger import setup_logging
 from script import find_occupied_voxels_vectorized
 from tqdm.auto import tqdm
-
+from osm_test import get_road_coordinates_by_type, get_terrain_coordinates_by_type
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +279,7 @@ if __name__=='__main__':
     schematic_folderpath  = Path('data/myschems')
     mcfunction_folderpath = Path('data/mcfunctions')
 
-    SEARCH_FOR_TILE_IN_ZONE = True
+    SEARCH_FOR_TILE_IN_ZONE = False
 
 
     # Minecraft parameters
@@ -513,6 +514,19 @@ if __name__=='__main__':
 
         lidar_tile_filepath = Path(tile_data['lidar']['filepath'])
         mnt_tile_filepath   = Path(tile_data['mnt']['filepath'])
+
+        # ------------------------------- Download & Process OSM ------------------------------- #
+        logger.info("Fetching and processing OSM data...")
+        
+        # bbox to tile polygon
+        zone_polygon_4326 = box(*tile_data['lidar']['bbox'])
+        transformer = pyproj.Transformer.from_crs("EPSG:2154", "EPSG:4326", always_xy=True).transform
+        zone_polygon_2154 = transform(transformer, zone_polygon_4326)
+
+        osm_roads = get_road_coordinates_by_type(zone_polygon_2154)
+        osm_terrains = get_terrain_coordinates_by_type(zone_polygon_2154)
+    
+        logger.info("OSM data fetched and processed.")
 
         # --------------------------------- Load MNT --------------------------------- #
         logger.info(f"Loading MNT file: {mnt_tile_filepath} ...")
