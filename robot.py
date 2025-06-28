@@ -7,19 +7,20 @@ from pathlib import Path
 
 mcfunction_folderpath = Path('data/mcfunctions/')
 
-TIME_AFTER_TP = 5
-TIME_AFTER_SCHEMATIC_LOAD = 3
+TIME_AFTER_TP = 6
+TIME_AFTER_SCHEMATIC_LOAD = 5
 TIME_AFTER_PASTE = 10
 
 
-time.sleep(5)
+time.sleep(2)
 box_response = pyautogui.confirm('Select the minecraft window, press the "esc" key, and click on the "OK" button.')
 
 if box_response=='Cancel':
     print('Stopping program')
+    exit(0)
 
 
-pyautogui.press('esc')            # Open chat
+pyautogui.press('esc')            # Close CM menu
 
 
 mcfunction_files = list(mcfunction_folderpath.glob('*.mcfunction'))
@@ -34,10 +35,12 @@ for mcfunction_filepath in mcfunction_files:
         if line[0]=='#': continue
 
         if line[0]=='/':
-
-            pyautogui.press('t')            # Open chat
             pyperclip.copy(line)            # Copy command in clipboard
+            time.sleep(0.1)
+            pyautogui.press('t')            # Open chat
+            time.sleep(0.1)
             pyautogui.hotkey('ctrl', 'v')   # paste command in MC chat
+            time.sleep(0.1)
             pyautogui.press('enter')        # execute command
 
             if   line.startswith('/tp'):              time.sleep(TIME_AFTER_TP)

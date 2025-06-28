@@ -17,7 +17,6 @@ import numpy as np
 
 
 # --- Configuration Constants ---
-GEOJSON_FILEPATH = Path("data/zone_test.geojson")
 TARGET_CRS = "EPSG:2154"  # Lambert-93, a projected CRS in meters
 RASTER_RESOLUTION_METERS = 1.0  # 1 meter resolution
 
@@ -69,7 +68,6 @@ ROAD_WIDTH_MAP = {
     "proposed": 5.0, # Default for proposed roads
     "construction": 5.0 # Default for roads under construction
 }
-
 
 
 # Define a priority for tag types (highways on top, then surface, etc.)
@@ -143,9 +141,6 @@ def process_overpass_result(result: overpy.Result) -> gpd.GeoDataFrame:
 
     return gpd.GeoDataFrame(features, crs="EPSG:4326")
 
-# def filter_out_roads(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-#     """Filters out the road types"""
-#     return gdf[~gdf['highway'].isin(FEATURE_VALUE_MAP.get('highway', {}).keys())].copy()
 
 
 def assign_feature_values(
@@ -176,372 +171,333 @@ def assign_feature_values(
 
 
 def rasterize_geometries(
-    gdf: gpd.GeoDataFrame, 
-    resolution_meters: float, 
+    gdf: gpd.GeoDataFrame,
+    resolution_meters: float,
     target_crs: str,
-    clip_polygon_proj: Polygon, # New parameter for clipping
-) -> Tuple[np.ndarray, List[float], rasterio.transform.Affine]:
+    clip_polygon_proj: Polygon,
+    type_column: str,
+) -> Tuple[Dict[str, np.ndarray], rasterio.transform.Affine]:
     """
-    Rasterizes GeoDataFrame geometries to a specified resolution in a target CRS.
-    Returns the raster array, its extent, and the affine transform.
+    Rasterizes GeoDataFrame geometries, creating a separate raster for each type.
+    Each raster is a boolean mask for a specific feature type.
+    The function handles reprojection, clipping, and buffering of LineStrings.
+
+    Args:
+        gdf: GeoDataFrame with features. Must contain the `type_column` and a
+             'buffer_distance' column for LineString features.
+        resolution_meters: The desired resolution of the output rasters in meters.
+        target_crs: The target CRS for rasterization (e.g., "EPSG:2154").
+        clip_polygon_proj: A shapely Polygon in the target CRS to define the
+                           raster bounds and clip geometries.
+        type_column: The name of the column in the GDF to group features by
+                     (e.g., 'highway', 'terrain_type').
+
+    Returns:
+        A tuple containing:
+        - A dictionary where keys are feature types from `type_column` and values
+          are the corresponding numpy raster arrays (masks).
+        - The affine transform for the rasters.
     """
     if gdf.empty:
         print("GeoDataFrame is empty, cannot rasterize.")
-        return np.array([]), [], rasterio.transform.Affine.identity()
+        return {}, rasterio.transform.Affine.identity()
 
-    # Reproject to a projected CRS for meter-based resolution
     gdf_proj = gdf.to_crs(target_crs)
-
-    # Clip the GeoDataFrame to the exact bounds of the input polygon
-    # This ensures that only relevant geometries are considered for rasterization
     gdf_proj_clipped = gdf_proj.clip(clip_polygon_proj)
 
     if gdf_proj_clipped.empty:
         print("GeoDataFrame is empty after clipping, cannot rasterize.")
-        return np.array([]), [], rasterio.transform.Affine.identity()
+        return {}, rasterio.transform.Affine.identity()
 
-    # Use the bounds of the clip_polygon_proj to define the raster extent
     minx, miny, maxx, maxy = clip_polygon_proj.bounds
-
-    width_proj = maxx - minx
-    height_proj = maxy - miny
-
-    out_shape = (int(np.ceil(height_proj / resolution_meters)),
-                 int(np.ceil(width_proj / resolution_meters)))
-
-    # Create the affine transform for the projected CRS based on the clip_polygon_proj bounds
-    geometries_to_rasterize = []
+    out_shape = (
+        int(np.ceil((maxy - miny) / resolution_meters)),
+        int(np.ceil((maxx - minx) / resolution_meters)),
+    )
     transform = rasterio.transform.from_bounds(
-        west=minx,
-        south=miny,
-        east=maxx,
-        north=maxy,
-        width=out_shape[1],
-        height=out_shape[0],
+        west=minx, south=miny, east=maxx, north=maxy,
+        width=out_shape[1], height=out_shape[0]
     )
 
-    # Prepare geometries for rasterization, applying buffer if necessary
-    # Iterate over the *clipped* GeoDataFrame
-    for idx, row in gdf_proj_clipped.iterrows():
-        geom = row.geometry
-        value = row['value']
-        # Check if 'buffer_distance' column exists and get its value, default to 0.0
-        buffer_dist = row.get('buffer_distance', 0.0)
+    rasters_by_type = {}
+    
+    # Sort by value to ensure higher-priority features are processed last,
+    # which can matter if geometries of the same type overlap.
+    if 'value' in gdf_proj_clipped.columns:
+        gdf_proj_clipped = gdf_proj_clipped.sort_values(by='value', ascending=True)
 
-        if isinstance(geom, LineString) and buffer_dist > 0:
-            # Buffer the LineString to create a Polygon representing the road width
-            buffered_geom = geom.buffer(buffer_dist, cap_style=3, join_style=3)
-            geometries_to_rasterize.append((buffered_geom, value))
-        else:
-            geometries_to_rasterize.append((geom, value))
+    # Group by the specified type column (e.g., 'highway', 'terrain_type')
+    for feature_type, group in gdf_proj_clipped.groupby(type_column):
+        if pd.isna(feature_type):
+            continue
 
-    # Rasterize the geometries using their assigned 'value'
-    raster = rasterize(
-        geometries_to_rasterize, # Use the list of (buffered_geom, value)
-        out_shape=out_shape,
-        transform=transform,
-        fill=0,  # Default value for areas not covered by features
-        default_value=0,
-        all_touched=True,  # Include all pixels touched by geometries
-    )
+        geometries_to_rasterize = []
+        for _, row in group.iterrows():
+            geom = row.geometry
+            buffer_dist = row.get('buffer_distance', 0.0)
 
-    extent = [minx, maxx, miny, maxy]
-    return raster, extent, transform
+            if isinstance(geom, LineString) and buffer_dist > 0:
+                buffered_geom = geom.buffer(buffer_dist, cap_style=3, join_style=3)
+                geometries_to_rasterize.append((buffered_geom, 1))
+            elif isinstance(geom, (Polygon, LineString)):
+                geometries_to_rasterize.append((geom, 1))
 
+        if not geometries_to_rasterize:
+            continue
 
-def create_custom_colormap(feature_map: Dict[str, Dict[str, int]]) -> mcolors.ListedColormap:
-    """
-    Creates a custom colormap based on the feature value map.
-    """
-    # Example colors (you'd want to refine these for better visual distinction)
-    # Ensure the list is long enough for all assigned values (up to max_value)
-    colors_list = [
-        (0, 0, 0, 0),  # Value 0 (transparent or background)
-        # Natural (1-10) - earthy/natural tones
-        (0.8, 0.8, 0.6), (0.9, 0.9, 0.9), (0.5, 0.5, 0.5), (0.4, 0.4, 0.4), (0.6, 0.7, 0.5),
-        (0.7, 0.8, 0.6), (0.2, 0.5, 0.2), (0.6, 0.8, 0.4), (0.4, 0.6, 0.8), (0.7, 0.7, 0.7),
-        # Landuse (11-20) - more human-influenced/broader categories
-        (0.1, 0.4, 0.1), (0.8, 0.7, 0.3), (0.5, 0.7, 0.3), (0.4, 0.6, 0.2), (0.7, 0.7, 0.7),
-        (0.9, 0.4, 0.4), (0.6, 0.3, 0.3), (0.4, 0.8, 0.8), (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), # Placeholder for 19, 20,
-        # Surface (21-30) - road/path colors (should be distinct and on top)
-        (0.6, 0.4, 0.2), (0.5, 0.5, 0.5), (0.8, 0.8, 0.6), (0.4, 0.6, 0.2), (0.5, 0.3, 0.1),
-        (0.3, 0.3, 0.3), (0.2, 0.2, 0.2),
-        # Highway (31-54) - road colors, ensure enough distinct colors
-        # Values 31-35
-        (0.4, 0.4, 0.4), (0.4, 0.4, 0.4), (0.5, 0.5, 0.5), (0.6, 0.6, 0.6), (0.7, 0.7, 0.7),
-        # Surface (21-30) - road/path colors (should be distinct and on top)
-        (0.6, 0.4, 0.2), (0.5, 0.5, 0.5), (0.8, 0.8, 0.6), (0.4, 0.6, 0.2), (0.5, 0.3, 0.1),
-        (0.3, 0.3, 0.3), (0.2, 0.2, 0.2),
-    ]
+        # Rasterize this group's geometries into a single mask
+        raster = rasterize(
+            geometries_to_rasterize,
+            out_shape=out_shape,
+            transform=transform,
+            fill=0,
+            default_value=0,
+            all_touched=True,
+            dtype='uint8'
+        )
+        rasters_by_type[feature_type] = raster
 
-    # Ensure the list is long enough for all values, fill with black if not enough
-    max_value = max(v for d in feature_map.values() for v in d.values())
-    while len(colors_list) <= max_value:
-        colors_list.append((0, 0, 0, 1))  # Default to black for unassigned values
-
-    return mcolors.ListedColormap(colors_list)
-
-
-def display_raster(
-    raster: np.ndarray, 
-    extent: List[float], 
-    custom_cmap: mcolors.ListedColormap,
-    feature_map: Dict[str, Dict[str, int]], 
-    resolution_meters: float,
-    output_filepath: str
-) -> None:
-    """
-    Displays the rasterized features with a custom colormap and colorbar.
-    """
-    if raster.size == 0:
-        print(f"No raster data to display for {output_filepath}.") # Added for clarity
-        return
-
-    fig, ax = plt.subplots(figsize=(12, 12))
-    max_value = max(v for d in feature_map.values() for v in d.values())
-
-    im = ax.imshow(raster, extent=extent, cmap=custom_cmap, vmin=0, vmax=max_value)
-    ax.set_title(f"Rasterized Features (Resolution: {resolution_meters}m)")
-    ax.set_xlabel("Easting (meters)")
-    ax.set_ylabel("Northing (meters)")
-
-    # Build the reverse mapping for colorbar labels
-    colorbar_labels_map = {}
-    for tag_type, values_dict in feature_map.items():
-        for tag_value, int_id in values_dict.items():
-            colorbar_labels_map[int_id] = f"{tag_type}: {tag_value}"
-
-    # Prepare colorbar ticks and labels
-    unique_assigned_values = sorted(np.unique(raster).tolist())
-    # Filter out 0 (background) if present
-    unique_assigned_values = [v for v in unique_assigned_values if v != 0]
-
-    cbar_ticks = unique_assigned_values
-    cbar_tick_labels = [colorbar_labels_map.get(v, 'Unknown') for v in unique_assigned_values]
-
-    cbar = fig.colorbar(im, ax=ax, ticks=cbar_ticks, orientation='vertical', shrink=0.75)
-    cbar.ax.set_yticklabels(cbar_tick_labels)
-    cbar.set_label('Feature Type')
-
-    plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
-    plt.close(fig) # Close the figure to free up memory
-
-
-def _get_coordinates_from_geometry(geom, origin_x: float, origin_y: float) -> List[Tuple[float, float]]:
-    """
-    Extracts coordinates from a shapely geometry and makes them relative to an origin.
-    Handles LineString, Polygon, MultiPolygon.
-    """
-    coords = []
-    if geom.geom_type == 'LineString':
-        for x, y in geom.coords:
-            coords.append((x - origin_x, y - origin_y))
-    elif geom.geom_type == 'Polygon':
-        # Only exterior for now, could add interiors if needed
-        for x, y in geom.exterior.coords:
-            coords.append((x - origin_x, y - origin_y))
-    elif geom.geom_type == 'MultiPolygon':
-        for poly in geom.geoms:
-            for x, y in poly.exterior.coords:
-                coords.append((x - origin_x, y - origin_y))
-    return coords
+    return rasters_by_type, transform
 
 
 def get_road_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple[float, float]]]:
     """
-    Extracts road coordinates by type, relative to the zone's origin.
+    Extracts road coordinates by type using a raster-based method, relative to
+    the zone's origin.
 
     Args:
-        polygon_wgs84 (Polygon): Polygon of the zone.
+        polygon_wgs84 (Polygon): Polygon of the zone in WGS84.
 
     Returns:
         Dict[str, List[Tuple[float, float]]]: Dictionary where keys are road types
             and values are lists of (x, y) coordinates relative to the zone's origin.
             If a road type is not found, its list of coordinates will be empty.
     """
-    # Initialize the dictionary with all possible road types and empty lists
-    road_coords_by_type: Dict[str, List[Tuple[float, float]]] = {
-        road_type: [] for road_type in ROAD_WIDTH_MAP.keys()
-    }
-
-    # 1. Reproject polygon to TARGET_CRS to get its bounds in meters
+    # 1. Reproject polygon to TARGET_CRS to get its bounds and origin in meters
     transformer = pyproj.Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True).transform
     polygon_proj = shapely_transform(transformer, polygon_wgs84)
-
     minx, miny, _, _ = polygon_proj.bounds
 
     # 2. Query Overpass and process result
     query = build_overpass_query(polygon_wgs84)
     overpass_result = query_overpass(query)
     gdf = process_overpass_result(overpass_result)
+    if gdf.empty:
+        return {road_type: [] for road_type in ROAD_WIDTH_MAP.keys()}
 
     # 3. Assign feature values and buffer distances
     gdf_with_values = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
 
-    # 4. Filter for roads and reproject to TARGET_CRS
-    roads_gdf = gdf_with_values[gdf_with_values['highway'].notna()].to_crs(TARGET_CRS)
+    # 4. Filter for roads
+    roads_gdf = gdf_with_values[gdf_with_values['highway'].notna()].copy()
+    
+    # 5. Rasterize roads by type using the 'highway' column
+    road_rasters, transform = rasterize_geometries(
+        gdf=roads_gdf,
+        resolution_meters=RASTER_RESOLUTION_METERS,
+        target_crs=TARGET_CRS,
+        clip_polygon_proj=polygon_proj,
+        type_column='highway'
+    )
 
-    # 5. Extract and store coordinates
-    for _, row in roads_gdf.iterrows():
-        highway_type = row['highway']
-        geom = row.geometry
-        buffer_dist = row.get('buffer_distance', 0.0)
-
-        # Apply buffering for LineStrings to represent road width
-        if isinstance(geom, LineString) and buffer_dist > 0:
-            buffered_geom = geom.buffer(buffer_dist, cap_style=3, join_style=3)
-            # If buffering results in MultiPolygon, iterate through its parts
-            if buffered_geom.geom_type == 'MultiPolygon':
-                for single_poly in buffered_geom.geoms:
-                    road_coords_by_type[highway_type].extend(_get_coordinates_from_geometry(single_poly, minx, miny))
-            else:
-                road_coords_by_type[highway_type].extend(_get_coordinates_from_geometry(buffered_geom, minx, miny))
-        elif geom: # For other geometry types (e.g., existing Polygons with highway tag) or no buffer
-            road_coords_by_type[highway_type].extend(_get_coordinates_from_geometry(geom, minx, miny))
-
-    return road_coords_by_type
+    # 6. Convert raster masks to relative coordinates
+    road_coords_by_type = {}
+    for road_type, raster in road_rasters.items():
+        # Find pixel indices where the raster is not zero
+        rows, cols = np.where(raster > 0)
+        
+        # Convert pixel indices to world coordinates (in TARGET_CRS)
+        xs, ys = rasterio.transform.xy(transform, rows, cols)
+        
+        # Make coordinates relative to the bottom-left corner (minx, miny)
+        # This makes the origin (0,0) of the output coordinate system correspond
+        # to the bottom-left corner of the zone's bounding box.
+        relative_coords = [(x - minx, y - miny) for x, y in zip(xs, ys)]
+        road_coords_by_type[road_type] = relative_coords
+        
+    # Ensure the final dictionary contains all possible road types
+    final_coords = {road_type: [] for road_type in ROAD_WIDTH_MAP.keys()}
+    final_coords.update(road_coords_by_type)
+    
+    return final_coords
 
 
 def get_terrain_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple[float, float]]]:
     """
-    Extracts terrain coordinates by type, relative to the zone's origin.
+    Extracts terrain coordinates by type using a raster-based method, relative
+    to the zone's origin.
 
     Args:
-        polygon_wgs84 (Polygon): Polygon of the zone.
+        polygon_wgs84 (Polygon): Polygon of the zone in WGS84.
 
     Returns:
         Dict[str, List[Tuple[float, float]]]: Dictionary where keys are terrain types
-            (natural, landuse, surface) and values are lists of (x, y) coordinates
-            relative to the zone's origin. If a terrain type is not found, its list
-            of coordinates will be empty.
+            and values are lists of (x, y) coordinates relative to the zone's origin.
+            If a terrain type is not found, its list of coordinates will be empty.
     """
-    # Initialize the dictionary with all possible terrain types and empty lists
-    terrain_coords_by_type: Dict[str, List[Tuple[float, float]]] = {}
-    for tag_type in ["natural", "landuse", "surface"]:
-        for terrain_type in FEATURE_VALUE_MAP.get(tag_type, {}).keys():
-            terrain_coords_by_type[terrain_type] = []
-
-    # 1. Reproject polygon to TARGET_CRS to get its bounds in meters
+    # 1. Reproject polygon to TARGET_CRS to get its bounds and origin in meters
     transformer = pyproj.Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True).transform
     polygon_proj = shapely_transform(transformer, polygon_wgs84)
-
     minx, miny, _, _ = polygon_proj.bounds
+    
+    # Initialize the result dictionary with all possible terrain types
+    all_terrain_types = {}
+    for tag_type in ["natural", "landuse", "surface"]:
+        for terrain_type in FEATURE_VALUE_MAP.get(tag_type, {}).keys():
+            all_terrain_types[terrain_type] = []
 
     # 2. Query Overpass and process result
     query = build_overpass_query(polygon_wgs84)
     overpass_result = query_overpass(query)
     gdf = process_overpass_result(overpass_result)
+    if gdf.empty:
+        return all_terrain_types
 
-    # 3. Assign feature values (not strictly needed for terrain, but good for consistency)
+    # 3. Assign feature values
     gdf_with_values = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
 
-    # 4. Filter for terrain and reproject to TARGET_CRS
-    # Terrain is anything that is not a 'highway' type
-    terrain_gdf = gdf_with_values[gdf_with_values['highway'].isna()].to_crs(TARGET_CRS)
-
-    # 5. Extract and store coordinates
-    for _, row in terrain_gdf.iterrows():
-        # Determine the specific terrain type (e.g., 'forest', 'sand')
-        terrain_type = None
-        for tag_type in ["natural", "landuse", "surface"]:
-            if tag_type in row and row[tag_type] in FEATURE_VALUE_MAP.get(tag_type, {}):
-                terrain_type = row[tag_type]
-                break
+    # 4. Filter for terrain and assign a 'terrain_type' string for grouping
+    terrain_gdf = gdf_with_values[gdf_with_values['highway'].isna()].copy()
+    
+    def _get_terrain_type(row):
+        # Find the highest priority terrain tag based on the defined order
+        for tag_type in ["surface", "landuse", "natural"]:
+            if tag_type in row and pd.notna(row[tag_type]) and row[tag_type] in FEATURE_VALUE_MAP.get(tag_type, {}):
+                return row[tag_type]
+        return None
         
-        if terrain_type and terrain_type in terrain_coords_by_type:
-            geom = row.geometry
-            # For terrain, we generally don't buffer lines unless explicitly specified
-            # We just extract the coordinates of the geometry as is
-            if geom.geom_type == 'MultiPolygon':
-                for single_poly in geom.geoms:
-                    terrain_coords_by_type[terrain_type].extend(_get_coordinates_from_geometry(single_poly, minx, miny))
-            else:
-                terrain_coords_by_type[terrain_type].extend(_get_coordinates_from_geometry(geom, minx, miny))
+    terrain_gdf['terrain_type'] = terrain_gdf.apply(_get_terrain_type, axis=1)
+    terrain_gdf.dropna(subset=['terrain_type'], inplace=True)
 
-    return terrain_coords_by_type
+    # 5. Rasterize terrain by its determined type
+    terrain_rasters, transform = rasterize_geometries(
+        gdf=terrain_gdf,
+        resolution_meters=RASTER_RESOLUTION_METERS,
+        target_crs=TARGET_CRS,
+        clip_polygon_proj=polygon_proj,
+        type_column='terrain_type'
+    )
+    
+    # 6. Convert raster masks to relative coordinates
+    terrain_coords_by_type = {}
+    for terrain_type, raster in terrain_rasters.items():
+        rows, cols = np.where(raster > 0)
+        xs, ys = rasterio.transform.xy(transform, rows, cols)
+        relative_coords = [(x - minx, y - miny) for x, y in zip(xs, ys)]
+        terrain_coords_by_type[terrain_type] = relative_coords
+
+    # Ensure the final dictionary contains all possible terrain types
+    all_terrain_types.update(terrain_coords_by_type)
+    return all_terrain_types
+
+
+def display_road_coordinates(
+    road_coords_by_type: Dict[str, List[Tuple[float, float]]],
+    title: str,
+    output_filepath: str
+) -> None:
+    """
+    Displays the extracted road coordinates as a scatter plot with different colors
+    for each road type.
+
+    Args:
+        road_coords_by_type: Dictionary from road type to list of (x, y) coordinates.
+        title: The title for the plot.
+        output_filepath: The path to save the output image file.
+    """
+    fig, ax = plt.subplots(figsize=(12, 12))
+    ax.set_facecolor('black') # Use a black background for better visibility
+    ax.set_aspect('equal', adjustable='box')
+
+    # Get a list of road types that actually have coordinates
+    found_road_types = [k for k, v in road_coords_by_type.items() if v]
+    
+    if not found_road_types:
+        print("No road coordinates to display.")
+        plt.close(fig)
+        return
+
+    # Create a color map to assign a unique color to each road type
+    # Using 'tab20' which has 20 distinct colors, good for categorical data
+    color_map = plt.get_cmap('tab20', len(found_road_types))
+    
+    for i, (road_type, coords) in enumerate(road_coords_by_type.items()):
+        if not coords:
+            continue  # Skip empty lists
+
+        # Unpack the list of tuples into two lists: x_vals and y_vals
+        x_vals, y_vals = zip(*coords)
+        
+        ax.scatter(
+            x_vals, 
+            y_vals, 
+            color=color_map(i), 
+            label=road_type,
+            s=1,          # Use small points for dense data
+            marker='.'    # Use a pixel marker
+        )
+
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel("Meters from Origin (X)")
+    ax.set_ylabel("Meters from Origin (Y)")
+    ax.legend(markerscale=10) # Make legend markers larger and more visible
+    plt.grid(True, linestyle='--', alpha=0.2)
+
+    plt.savefig(output_filepath, dpi=300, bbox_inches='tight')
+    print(f"Saved road coordinate plot to: {output_filepath}")
+    plt.close(fig) # Close the figure to free up memory
 
 
 def main():
     """
-    Main function to orchestrate the process of fetching, processing,
-    rasterizing, and displaying OSM data.
+    Main function to orchestrate the process of fetching and processing OSM data
+    to extract road and terrain coordinates.
     """
     # 1. Load polygon from GeoJSON
-    print("Loading and reprojecting polygon from GeoJSON...")
-    with open(GEOJSON_FILEPATH, 'r') as f:
-        poly_data = json.load(f)["features"][0]["geometry"]
-    polygon_wgs84 = Polygon(poly_data["coordinates"][0])
+    print("Loading polygon from GeoJSON...")
+    # Make sure to create this file or replace with your own
+    geojson_filepath = Path("data/zone_test_tile.geojson")
+    if not geojson_filepath.exists():
+        print(f"Error: GeoJSON file not found at {geojson_filepath}")
+        print("Please create a 'data' directory and place your GeoJSON file in it.")
+        # Create a dummy polygon for demonstration if file doesn't exist
+        print("Using a dummy polygon over Paris for demonstration.")
+        polygon_wgs84 = Polygon.from_bounds(2.34, 48.85, 2.36, 48.86)
+    else:
+        with open(geojson_filepath, 'r') as f:
+            poly_data = json.load(f)
+        
+        # The example file seems to be in Lambert-93, so we convert to WGS84
+        polygon_lambert93 = Polygon(poly_data["geometry"]["coordinates"][0])
+        transformer = pyproj.Transformer.from_crs("EPSG:2154", "EPSG:4326", always_xy=True).transform
+        polygon_wgs84 = shapely_transform(transformer, polygon_lambert93)
 
-    # Test get_coordinates functions
+    # 2. Test the refactored coordinate extraction functions
+    print("\n--- Getting Road Coordinates ---")
     road_coords_by_type = get_road_coordinates_by_type(polygon_wgs84)
     print('ROAD COORDINATES:' + '-'*30)
     for road_type, coords in road_coords_by_type.items():
-        print('-'*20)
-        print(f'{road_type}')
-        if len(coords) > 0:
-            print(f'\tSize: {len(coords)}  |  minx: {min(coord[0] for coord in coords)}  |  miny: {min(coord[1] for coord in coords)} | maxx: {max(coord[0] for coord in coords)}  |  maxy: {max(coord[1] for coord in coords)}')
+        if coords:
+            print(f"- {road_type}: Found {len(coords)} coordinate points.")
         else:
-            print(f'\tSize: {len(coords)}')
-    
+            print(f"- {road_type}: Not found in the area.")
+
+    print("\n--- Getting Terrain Coordinates ---")
     terrain_coords_by_type = get_terrain_coordinates_by_type(polygon_wgs84)
     print('TERRAIN COORDINATES:' + '-'*30)
     for terrain_type, coords in terrain_coords_by_type.items():
-        print('-'*20)
-        print(f'{terrain_type}')
-        if len(coords) > 0:
-            print(f'\tSize: {len(coords)}  |  minx: {min(coord[0] for coord in coords)}  |  miny: {min(coord[1] for coord in coords)} | maxx: {max(coord[0] for coord in coords)}  |  maxy: {max(coord[1] for coord in coords)}')
+        if coords:
+            print(f"- {terrain_type}: Found {len(coords)} coordinate points.")
         else:
-            print(f'\tSize: {len(coords)}')
+            print(f"- {terrain_type}: Not found in the area.")
 
-    exit(0)
-
-
-    # Create a GeoSeries from the polygon to handle reprojection easily
-    # The input GeoJSON is assumed to be in WGS84 (EPSG:4326)
-    poly_gs = gpd.GeoSeries([polygon_wgs84], crs="EPSG:4326")
-
-    # Reproject the polygon to the target CRS to be used for clipping
-    poly_gs_proj = poly_gs.to_crs(TARGET_CRS)
-    polygon_proj = poly_gs_proj.iloc[0]
-
-    polygon = polygon_wgs84 # Use original WGS84 polygon for Overpass query
-
-    # 2. Create a combined Overpass query for both features and roads
-    print("Building Overpass queries...")
-    query = build_overpass_query(polygon)
-    overpass_result = query_overpass(query)
-
-    # 3. Process Overpass result into a GeoDataFrame
-    gdf = process_overpass_result(overpass_result)
-
-
-    # 4. Assign numerical values to features
-    print("Assigning feature values based on priority and mapping...")
-    gdf_with_values = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
-
-    # Separate GeoDataFrames for roads and terrain based on the assigned values
-    roads_gdf = gdf_with_values[gdf_with_values['value'] >= 31].copy() # Roads are values >= 31
-    terrain_gdf = gdf_with_values[gdf_with_values['value'] < 31].copy() # Terrain is everything else
-
-    # 5. Rasterize geometries
-    print("Rasterizing all features...")
-    raster_array, extent, _ = rasterize_geometries(gdf_with_values, RASTER_RESOLUTION_METERS, TARGET_CRS, polygon_proj)
-    print("Rasterizing roads...")
-    raster_array_roads, extent_roads, _ = rasterize_geometries(roads_gdf, RASTER_RESOLUTION_METERS, TARGET_CRS, polygon_proj)
-    print("Rasterizing terrain...")
-    raster_array_terrain, extent_terrain, _ = rasterize_geometries(terrain_gdf, RASTER_RESOLUTION_METERS, TARGET_CRS, polygon_proj)
-
-    # 6. Create custom colormap
-    custom_cmap = create_custom_colormap(FEATURE_VALUE_MAP)
-    
-
-    # 7. Display the raster
-    print("Displaying raster for all features...")
-    display_raster(raster_array,         extent,         custom_cmap, FEATURE_VALUE_MAP, RASTER_RESOLUTION_METERS, output_filepath="raster_all_features.png")
-    print("Displaying raster for roads...")
-    display_raster(raster_array_roads,   extent_roads,   custom_cmap, FEATURE_VALUE_MAP, RASTER_RESOLUTION_METERS, output_filepath="raster_all_features_roads.png")
-    print("Displaying raster for terrain...")
-    display_raster(raster_array_terrain, extent_terrain, custom_cmap, FEATURE_VALUE_MAP, RASTER_RESOLUTION_METERS, output_filepath="raster_all_features_terrain.png")
+    # 3. NEW: Display the extracted road coordinates
+    print("\n--- Displaying Road Coordinates ---")
+    display_road_coordinates(
+        road_coords_by_type,
+        title="Extracted Road Network by Type",
+        output_filepath="road_coordinates_plot.png"
+    )
 
 
 if __name__ == '__main__':

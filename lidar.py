@@ -281,6 +281,11 @@ if __name__=='__main__':
 
     SEARCH_FOR_TILE_IN_ZONE = False
 
+    DO_MNT = True
+    DO_OSM = True
+    DO_LIDAR = False
+
+
 
     # Minecraft parameters
     MANUAL_Z_AXIS_TRANSLATE = True  # If True, you must set LOWEST_MINECRAFT_POINT to the lowest point of the MNT
@@ -290,6 +295,7 @@ if __name__=='__main__':
     GROUND_CLASS = 2
     GROUND_BLOCK_TOP = "minecraft:grass_block"
     GROUND_BLOCK_BELOW = "minecraft:dirt"
+    GROUND_BLOCK_ROAD = "minecraft:obsidian"
     GROUND_THICKNESS = 16
 
     # Processing parameters
@@ -525,6 +531,10 @@ if __name__=='__main__':
 
         osm_roads = get_road_coordinates_by_type(zone_polygon_2154)
         osm_terrains = get_terrain_coordinates_by_type(zone_polygon_2154)
+
+        # Clean OSM for MC
+        osm_roads    = {k:[(x,-y+1000) for x,y in v] for k,v in osm_roads.items()}
+        osm_terrains = {k:[(x,-y+1000) for x,y in v] for k,v in osm_terrains.items()}
     
         logger.info("OSM data fetched and processed.")
 
@@ -569,6 +579,7 @@ if __name__=='__main__':
         mnt_array = mnt_array.T
         
         logger.info("MNT data cleaned")
+
 
         # ------------------------------ Load Lidar Data ----------------------------- #
         logger.info(f"Loading lidar file: {lidar_tile_filepath} ...")
@@ -623,6 +634,9 @@ if __name__=='__main__':
                 ymin_absolute = tile_min_y + ymin_relative
                 ymax_absolute = tile_min_y + ymax_relative
 
+                
+                tqdm.write(f'BATCH : {xmin_relative=} {xmax_relative=} {ymin_relative=} {ymax_relative=}')
+
                 # ------------------------------ MNT batch data ------------------------------ #
                 mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
                 mnt_batch_array = mnt_batch_array + z_axis_translate
@@ -637,52 +651,74 @@ if __name__=='__main__':
                         for i in range(1, GROUND_THICKNESS+1):
                             if z-i > LOWEST_MINECRAFT_POINT:
                                 schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
+                tqdm.write(f'MNT : {mnt_batch_array.shape=} {mnt_batch_array.min()=} | {mnt_batch_array.max()=}')
+
+                # ------------------------------ OSM batch data ------------------------------ #
+
+                if DO_OSM:
+                    debug_coord = list()
+                    nb_road_block_available = 0
+                    nb_road_block_placed = 0
+                    for road_type, road_data in tqdm(osm_roads.items(), desc='Placing OSM roads', leave=False):
+                        for road_point_x, road_point_y in tqdm(road_data, desc=f'Placing OSM points ({road_type})', leave=False):
+                            nb_road_block_available += 1
+                            if xmin_relative <= road_point_x < xmax_relative and ymin_relative <= road_point_y < ymax_relative:
+                                road_point_x = int(road_point_x) - xmin_relative
+                                road_point_y = int(road_point_y) - ymin_relative
+                                debug_coord.append((road_point_x, road_point_y))
+                                road_block_height = mnt_batch_array[road_point_x, road_point_y]
+                                schem.setBlock((road_point_x, road_block_height, road_point_y), GROUND_BLOCK_ROAD)
+                                nb_road_block_placed += 1
+                    debug_coord = np.array(debug_coord)
+                    tqdm.write(f'OSM : {debug_coord[:,0].min()=} {debug_coord[:,0].max()=} {debug_coord[:,1].min()=} {debug_coord[:,1].max()=}')
+                    tqdm.write(f'Batch blocks available : {nb_road_block_available} | Placed : {nb_road_block_placed}')
                 
 
-                # ----------------------------- Lidar batch data ----------------------------- #
-                lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
-                                                   (lidar.x>=xmin_relative) & 
-                                                   (lidar.y<=ymax_relative) & 
-                                                   (lidar.y>=ymin_relative)]
-                
-                point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
-
-                # Voxelize the points for each class
-                point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
-
-                for point_class in tqdm(point_classes_no_ground, desc='Voxelize lidar points', leave=False):
-                    mask = lidar_batch.classification == point_class
-                    batch_ground_points_no_ground = lidar_batch[mask]
-
-                    x = batch_ground_points_no_ground.x
-                    y = batch_ground_points_no_ground.y
-                    z = batch_ground_points_no_ground.z + z_axis_translate
-                    xyz_no_ground = np.vstack([x, y, z]).T
-
-                    points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
+                if DO_LIDAR:
+                    # ----------------------------- Lidar batch data ----------------------------- #
+                    lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
+                                                    (lidar.x>=xmin_relative) & 
+                                                    (lidar.y<=ymax_relative) & 
+                                                    (lidar.y>=ymin_relative)]
                     
-                    voxel_origins_relative_m = find_occupied_voxels_vectorized(
-                        points_relative_to_voxel_origin,
-                        voxel_size=VOXEL_SIDE,
-                        min_points_per_voxel=0
-                    )
-                    point_coordinates[point_class] = voxel_origins_relative_m
+                    point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
 
-                dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates, grid_size=batch_size)
+                    # Voxelize the points for each class
+                    point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
+
+                    for point_class in tqdm(point_classes_no_ground, desc='Voxelize lidar points', leave=False):
+                        mask = lidar_batch.classification == point_class
+                        batch_ground_points_no_ground = lidar_batch[mask]
+
+                        x = batch_ground_points_no_ground.x
+                        y = batch_ground_points_no_ground.y
+                        z = batch_ground_points_no_ground.z + z_axis_translate
+                        xyz_no_ground = np.vstack([x, y, z]).T
+
+                        points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
+                        
+                        voxel_origins_relative_m = find_occupied_voxels_vectorized(
+                            points_relative_to_voxel_origin,
+                            voxel_size=VOXEL_SIDE,
+                            min_points_per_voxel=0
+                        )
+                        point_coordinates[point_class] = voxel_origins_relative_m
+
+                    dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates, grid_size=batch_size)
 
 
 
-                # ----------------------- Write lidar data to schematic ---------------------- #
-                do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
-                do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
-                do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
-                do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
-                do_Building(         filtered_points[6], choosen_template_point_classes, schem)
-                do_Water(            filtered_points[9], choosen_template_point_classes, schem)
-                do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
-                do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
-                do_Virtual_Points(   filtered_points[66], choosen_template_point_classes, schem)
-                do_Miscellaneous(    filtered_points[67], choosen_template_point_classes, schem)
+                    # ----------------------- Write lidar data to schematic ---------------------- #
+                    do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
+                    do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
+                    do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
+                    do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
+                    do_Building(         filtered_points[6], choosen_template_point_classes, schem)
+                    do_Water(            filtered_points[9], choosen_template_point_classes, schem)
+                    do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
+                    do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
+                    do_Virtual_Points(   filtered_points[66], choosen_template_point_classes, schem)
+                    do_Miscellaneous(    filtered_points[67], choosen_template_point_classes, schem)
 
 
                 # --------------------------- Save batch schematic --------------------------- #
