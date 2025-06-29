@@ -38,7 +38,7 @@ for mcfunction_filepath in mcfunction_files:
             pyperclip.copy(line)            # Copy command in clipboard
             time.sleep(0.1)
             pyautogui.press('t')            # Open chat
-            time.sleep(0.1)
+            # time.sleep(0.2)
             pyautogui.hotkey('ctrl', 'v')   # paste command in MC chat
             time.sleep(0.1)
             pyautogui.press('enter')        # execute command

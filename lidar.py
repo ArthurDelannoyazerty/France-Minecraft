@@ -317,6 +317,22 @@ if __name__=='__main__':
         }
     }
 
+    # point class : min nb points per voxel 
+    lidar_point_class =  {
+        1:2,            # No Class
+        # 2:9999,       # Ground
+        3:2,            # Small Vegetation
+        4:2,            # Medium Vegetation
+        5:2,            # High Vegetation
+        6:2,            # Building
+        9:0,            # Water
+        17:0,           # Bridge
+        64:0,           # Perennial Soil
+        66:0,           # Virtual Points
+        67:0            # Miscellaneous
+    }
+
+
 
     # -------------------------- Download step ------------------------- #
     download_ign_available_tiles(lidar_tiles_available_filepath, 'point_cloud', FORCE_DOWNLOAD_LIDAR_CATALOG)
@@ -663,12 +679,11 @@ if __name__=='__main__':
                                                     (lidar.y<=ymax_relative) & 
                                                     (lidar.y>=ymin_relative)]
                     
-                    point_classes_no_ground =  [1, 3, 4, 5, 6, 9, 17, 64, 66, 67]
 
                     # Voxelize the points for each class
-                    point_coordinates = {point_class:list() for point_class in point_classes_no_ground}     # {1: [(x1,y1,z1),...], ...}
+                    point_coordinates = {point_class:list() for point_class in lidar_point_class.keys()}     # {1: [(x1,y1,z1),...], ...}
 
-                    for point_class in tqdm(point_classes_no_ground, desc='Voxelize lidar points', leave=False):
+                    for point_class, min_points_per_voxel in tqdm(lidar_point_class.items(), desc='Voxelize lidar points', leave=False):
                         mask = lidar_batch.classification == point_class
                         batch_ground_points_no_ground = lidar_batch[mask]
 
@@ -682,7 +697,7 @@ if __name__=='__main__':
                         voxel_origins_relative_m = find_occupied_voxels_vectorized(
                             points_relative_to_voxel_origin,
                             voxel_size=VOXEL_SIDE,
-                            min_points_per_voxel=0
+                            min_points_per_voxel=min_points_per_voxel
                         )
                         point_coordinates[point_class] = voxel_origins_relative_m
 
