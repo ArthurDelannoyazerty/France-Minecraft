@@ -41,32 +41,31 @@ FEATURE_VALUE_MAP = {
 
 
 # Typical real-world widths in meters for different highway types
-# These values are approximate and can be adjusted
 ROAD_WIDTH_MAP = {
-    "motorway": 20.0,  # Multi-lane highway, including median
-    "trunk": 15.0,     # Major non-motorway road
-    "primary": 12.0,
-    "secondary": 10.0,
-    "tertiary": 8.0,
-    "unclassified": 6.0,
-    "residential": 5.0,
-    "service": 4.0,
-    "living_street": 4.0,
-    "pedestrian": 3.0,
-    "footway": 2.0,
-    "cycleway": 2.5,
-    "path": 2.0,
-    "track": 3.0,
-    "steps": 1.5,
-    "bridleway": 2.0,
-    "raceway": 15.0, # Varies greatly, this is a general estimate
-    "bus_guideway": 5.0,
-    "corridor": 3.0,
-    "elevator": 1.5,
-    "escalator": 2.0,
-    "platform": 5.0, # Varies, e.g., train platform
-    "proposed": 5.0, # Default for proposed roads
-    "construction": 5.0 # Default for roads under construction
+    "motorway": 3.5 * 2 + 3.0 * 2,        # 2×3,5 m voies + 2×3 m BAU ≈ 13 m emprise minimal
+    "trunk": 3.5 * 2 + 1.5 * 2,          # 2×3,5 m + accotements ≈ 10 m
+    "primary": 3.5 * 2 + 1.5 * 2,        # voie principal similaire au "trunk"
+    "secondary": 3.25 * 2 + 1.0 * 2,     # voies en zone urbaine ou routes tampons ≈ 8,5 m
+    "tertiary": 3.0 * 2 + 0.75 * 2,      # petites routes rurales ≈ 7,5 m
+    "unclassified": 3.0 * 2,            # 2 voies sans accotement ≈ 6 m
+    "residential": 3.0 * 2,             # voiries urbaines ≈ 6 m
+    "service": 3.0,                      # accès ponctuels ≈ 3 m
+    "living_street": 3.0,                # zones 20 km/h ≈ 3 m
+    "pedestrian": 1.0,                   # voiries partagées
+    "footway": 1.0,                      # trottoirs ou chemins piétons ≈ 2 m
+    "cycleway": 2.5,                     # piste unidirectionnelle ≈ 2 à 2,5 m
+    "path": 3.0,                         # chemin rural ≈ 3 m
+    "track": 3.0,                        # voies agricoles ≈ 3 m
+    "steps": 1.5,                        # escaliers ≈ 1,5 m
+    "bridleway": 2.5,                    # voies équestres ≈ 2–3 m
+    "raceway": 12.0,                     # voie sportive ou circuit ≈ 10–15 m
+    "bus_guideway": 3.25,                # voie bus ≈ 3–3,5 m
+    "corridor": 3.0,                     # couloirs partagés ≈ 3 m
+    "elevator": 2.0,                     # ascenseurs extérieurs ≈ 2 m
+    "escalator": 2.0,                    # escalators ≈ 2 m
+    "platform": 5.0,                     # quai de gare ≈ 5 m
+    "proposed": 3.0,                     # estimation parcellaire ≈ 3 m
+    "construction": 3.0,                 # chantier temporaire ≈ 3 m
 }
 
 

@@ -202,10 +202,7 @@ def do_No_Class(coordinates:list[tuple[np.float64, np.float64, np.float64]], blo
     for x,y,z in block_to_delete:
         schem.setBlock((int(x),int(z),int(y)), 'minecraft:air')
 
-    tqdm.write(f'{len(coordinates)} No Class points | {len(no_class_placed_blocks)} block placed | {len(block_to_delete)} block deleted')
-
-
-
+    # tqdm.write(f'{len(coordinates)} No Class points | {len(no_class_placed_blocks)} block placed | {len(block_to_delete)} block deleted')
 
 def do_Small_Vegetation(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
@@ -328,23 +325,46 @@ if __name__=='__main__':
     # Block mapping
     block_template = {
         "lidar":{
-            'No Class': 'minecraft:stone',
+            'No Class':         'minecraft:stone',
             'Small Vegetation': 'minecraft:short_grass',
-            'Medium Vegetation': 'minecraft:moss_block',
-            'High Vegetation': 'minecraft:oak_leaves',
-            'Building': 'minecraft:stone_bricks',
-            'Water': 'minecraft:blue_stained_glass',
-            'Bridge': 'minecraft:polished_blackstone',
-            'Perennial Soil': 'minecraft:iron_block',
-            'Virtual Points': 'minecraft:diorite',
-            'Miscellaneous': 'minecraft:basalt'
+            'Medium Vegetation':'minecraft:moss_block',
+            'High Vegetation':  'minecraft:oak_leaves',
+            'Building':         'minecraft:stone_bricks',
+            'Water':            'minecraft:blue_stained_glass',
+            'Bridge':           'minecraft:polished_blackstone',
+            'Perennial Soil':   'minecraft:iron_block',
+            'Virtual Points':   'minecraft:diorite',
+            'Miscellaneous':    'minecraft:basalt'
         },
         "mnt":{
-            'ground_top': 'minecraft:grass_block',
+            'ground_top':   'minecraft:grass_block',
             'ground_below': 'minecraft:dirt'
         },
         "osm":{
-            'road': 'minecraft:obsidian'
+            "motorway":     "minecraft:black_concrete",
+            "trunk":        "minecraft:gray_concrete",
+            "primary":      "minecraft:light_gray_concrete",
+            "secondary":    "minecraft:andesite",
+            "tertiary":     "minecraft:polished_andesite",
+            "unclassified": "minecraft:gravel",
+            "residential":  "minecraft:cobblestone",
+            "service":      "minecraft:dirt_path",
+            "living_street":"minecraft:stone_bricks",
+            "pedestrian":   "minecraft:smooth_stone",
+            "footway":      "minecraft:stone_slab",
+            "cycleway":     "minecraft:green_concrete",
+            "path":         "minecraft:coarse_dirt",
+            "track":        "minecraft:sand",
+            "steps":        "minecraft:oak_stairs",
+            "bridleway":    "minecraft:spruce_planks",
+            "raceway":      "minecraft:red_concrete",
+            "bus_guideway": "minecraft:yellow_concrete",
+            "corridor":     "minecraft:quartz_block",
+            "elevator":     "minecraft:iron_bars",
+            "escalator":    "minecraft:polished_diorite_slab",
+            "platform":     "minecraft:polished_granite",
+            "proposed":     "minecraft:light_blue_concrete",
+            "construction": "minecraft:orange_concrete"
         }
     }
 
@@ -361,6 +381,33 @@ if __name__=='__main__':
         64:0,           # Perennial Soil
         66:0,           # Virtual Points
         67:0            # Miscellaneous
+    }
+
+    road_block_template = {
+        "motorway": 20.0,  # Multi-lane highway, including median
+        "trunk": 15.0,     # Major non-motorway road
+        "primary": 12.0,
+        "secondary": 10.0,
+        "tertiary": 8.0,
+        "unclassified": 6.0,
+        "residential": 5.0,
+        "service": 4.0,
+        "living_street": 4.0,
+        "pedestrian": 3.0,
+        "footway": 2.0,
+        "cycleway": 2.5,
+        "path": 2.0,
+        "track": 3.0,
+        "steps": 1.5,
+        "bridleway": 2.0,
+        "raceway": 15.0, # Varies greatly, this is a general estimate
+        "bus_guideway": 5.0,
+        "corridor": 3.0,
+        "elevator": 1.5,
+        "escalator": 2.0,
+        "platform": 5.0, # Varies, e.g., train platform
+        "proposed": 5.0, # Default for proposed roads
+        "construction": 5.0 # Default for roads under construction
     }
 
 
@@ -697,7 +744,7 @@ if __name__=='__main__':
                                 road_point_y = int(road_point_y) - ymin_relative
                                 # debug_coord.append((road_point_x, road_point_y))
                                 road_block_height = mnt_batch_array[road_point_x, road_point_y]
-                                schem.setBlock((road_point_x, road_block_height, road_point_y), block_template['osm']['road'])
+                                schem.setBlock((road_point_x, road_block_height, road_point_y), block_template['osm'][road_type])
                                 nb_road_block_placed += 1
                     # debug_coord = np.array(debug_coord)
                     # tqdm.write(f'OSM : {debug_coord[:,0].min()=} {debug_coord[:,0].max()=} {debug_coord[:,1].min()=} {debug_coord[:,1].max()=}')

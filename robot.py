@@ -28,6 +28,7 @@ for mcfunction_filepath in mcfunction_files:
         
     with open(mcfunction_filepath, 'r') as f:
         mcfunction_lines = f.readlines()
+    print(f'------------------------ Reading file : {mcfunction_filepath}')
 
     for line in mcfunction_lines:
         line = line.strip()
