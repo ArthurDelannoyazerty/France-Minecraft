@@ -170,86 +170,76 @@ def dominant_voxel_points(
 
 
 
-def do_No_Class(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[1]
+def do_No_Class(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
         if current_block_state=='minecraft:air':
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['No Class'])
 
-def do_Small_Vegetation(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[3]
+def do_Small_Vegetation(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state==GROUND_BLOCK_TOP:
+        if current_block_state==block_template['mnt']['ground_top']:
             above_block_state = schem.getBlockDataAt((int(x),int(z+1),int(y)))
-            if above_block_state==GROUND_BLOCK_TOP:
+            if above_block_state==block_template['mnt']['ground_top']:
                 continue
             else: 
                 z += 1
-        schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['Small Vegetation'])
 
-def do_Medium_Vegetation(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[4]
+def do_Medium_Vegetation(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        if current_block_state=='minecraft:air' or current_block_state==block_template['lidar']['No Class']:
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['Medium Vegetation'])
 
-def do_High_Vegetation(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[5]
+def do_High_Vegetation(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        if current_block_state=='minecraft:air' or current_block_state==block_template['lidar']['No Class']:
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['High Vegetation'])
 
-def do_Building(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[6]
+def do_Building(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        if current_block_state=='minecraft:air' or current_block_state==block_template['lidar']['No Class']:
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['Building'])
         # Extend the building block to the ground
         for z_below in range(int(z), LOWEST_MINECRAFT_POINT, -1):
             below_block_state = schem.getBlockDataAt((int(x),int(z_below),int(y)))
-            if below_block_state==GROUND_BLOCK_BELOW:
+            if below_block_state==block_template['mnt']['ground_below']:
                 break
-            schem.setBlock((int(x),int(z_below),int(y)), bloc_type[0])
+            schem.setBlock((int(x),int(z_below),int(y)), block_template['lidar']['Building'])
 
-def do_Water(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[9]
+def do_Water(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        if current_block_state=='minecraft:air' or current_block_state==block_template['lidar']['No Class']:
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['Water'])
 
-def do_Bridge(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[17]
+def do_Bridge(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        if current_block_state=='minecraft:air' or current_block_state==block_template['lidar']['No Class']:
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['Bridge'])
 
-def do_Perennial_Soil(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[64]
+def do_Perennial_Soil(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        if current_block_state=='minecraft:air' or current_block_state==block_template['lidar']['No Class']:
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['Perennial Soil'])
 
-def do_Virtual_Points(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[66]
+def do_Virtual_Points(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        if current_block_state=='minecraft:air' or current_block_state==block_template['lidar']['No Class']:
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['Virtual Points'])
 
-def do_Miscellaneous(coordinates, choosen_template_point_classes:dict[int, list[str]], schem:mcschematic.MCSchematic):
-    bloc_type = choosen_template_point_classes[67]
+def do_Miscellaneous(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
-        if current_block_state=='minecraft:air' or current_block_state==choosen_template_point_classes[1]:
-            schem.setBlock((int(x),int(z),int(y)), bloc_type[0])
+        if current_block_state=='minecraft:air' or current_block_state==block_template['lidar']['No Class']:
+            schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['Miscellaneous'])
 
 
 
@@ -283,7 +273,7 @@ if __name__=='__main__':
 
     DO_MNT = True
     DO_OSM = True
-    DO_LIDAR = False
+    DO_LIDAR = True
 
 
 
@@ -292,10 +282,7 @@ if __name__=='__main__':
     MANUAL_Z_AXIS_TRANSLATE_VALUE = -2000  # If MANUAL_Z_AXIS_TRANSLATE is True, this value will be used to translate the Z axis of the MNT to the Minecraft world
     LOWEST_MINECRAFT_POINT = -2031          # If normal minecraft : -60
     HIGHEST_MINECRAFT_POINT = 2025          # If normal minecraft : 319
-    GROUND_CLASS = 2
-    GROUND_BLOCK_TOP = "minecraft:grass_block"
-    GROUND_BLOCK_BELOW = "minecraft:dirt"
-    GROUND_BLOCK_ROAD = "minecraft:obsidian"
+
     GROUND_THICKNESS = 16
 
     # Processing parameters
@@ -308,33 +295,28 @@ if __name__=='__main__':
     INTERPOLATION_GRID_CELL_SIZE = 1.0      # Grid resolution for point cloud interpolation
 
     # Block mapping
-    points_classes_name = {
-        1 : "No Class", 
-        2 : "Ground", 
-        3 : "Small Vegetation", 
-        4 : "Medium Vegetation",
-        5 : "High Vegetation", 
-        6 : "Building", 
-        9 : "Water", 
-        17: "Bridge",
-        64: "Perennial Soil", 
-        66: "Virtual Points", 
-        67: "Miscellaneous"
+    block_template = {
+        "lidar":{
+            'No Class': 'minecraft:stone',
+            'Small Vegetation': 'minecraft:short_grass',
+            'Medium Vegetation': 'minecraft:moss_block',
+            'High Vegetation': 'minecraft:oak_leaves',
+            'Building': 'minecraft:stone_bricks',
+            'Water': 'minecraft:blue_stained_glass',
+            'Bridge': 'minecraft:polished_blackstone',
+            'Perennial Soil': 'minecraft:iron_block',
+            'Virtual Points': 'minecraft:diorite',
+            'Miscellaneous': 'minecraft:basalt'
+        },
+        "mnt":{
+            'ground_top': 'minecraft:grass_block',
+            'ground_below': 'minecraft:dirt'
+        },
+        "osm":{
+            'road': 'minecraft:obsidian'
+        }
     }
-    choosen_template_point_classes = {
-        1 : ["minecraft:stone"],
-        2 : ["minecraft:grass_block"],
-        3 : ["minecraft:short_grass"], 
-        4 : ["minecraft:moss_block"],
-        5 : ["minecraft:oak_leaves"],
-        6 : ["minecraft:stone_bricks"],
-        9 : ["minecraft:blue_stained_glass"],
-        17: ["minecraft:polished_blackstone"],
-        64: ["minecraft:dirt_path"],
-        66: ["minecraft:diorite"],
-        67: ["minecraft:basalt"],
-    }
-    
+
 
     # -------------------------- Download step ------------------------- #
     download_ign_available_tiles(lidar_tiles_available_filepath, 'point_cloud', FORCE_DOWNLOAD_LIDAR_CATALOG)
@@ -635,7 +617,7 @@ if __name__=='__main__':
                 ymax_absolute = tile_min_y + ymax_relative
 
                 
-                tqdm.write(f'BATCH : {xmin_relative=} {xmax_relative=} {ymin_relative=} {ymax_relative=}')
+                # tqdm.write(f'BATCH : {xmin_relative=} {xmax_relative=} {ymin_relative=} {ymax_relative=}')
 
                 # ------------------------------ MNT batch data ------------------------------ #
                 mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
@@ -647,16 +629,16 @@ if __name__=='__main__':
                     for y in range(mnt_batch_array.shape[1]):
                         z = mnt_batch_array[x, y]
 
-                        schem.setBlock((x, z, y), GROUND_BLOCK_TOP)
+                        schem.setBlock((x, z, y), block_template['mnt']['ground_top'])
                         for i in range(1, GROUND_THICKNESS+1):
                             if z-i > LOWEST_MINECRAFT_POINT:
-                                schem.setBlock((x, z-i, y), GROUND_BLOCK_BELOW)
-                tqdm.write(f'MNT : {mnt_batch_array.shape=} {mnt_batch_array.min()=} | {mnt_batch_array.max()=}')
+                                schem.setBlock((x, z-i, y), block_template['mnt']['ground_below'])
+                # tqdm.write(f'MNT : {mnt_batch_array.shape=} {mnt_batch_array.min()=} | {mnt_batch_array.max()=}')
 
                 # ------------------------------ OSM batch data ------------------------------ #
 
                 if DO_OSM:
-                    debug_coord = list()
+                    # debug_coord = list()
                     nb_road_block_available = 0
                     nb_road_block_placed = 0
                     for road_type, road_data in tqdm(osm_roads.items(), desc='Placing OSM roads', leave=False):
@@ -665,13 +647,13 @@ if __name__=='__main__':
                             if xmin_relative <= road_point_x < xmax_relative and ymin_relative <= road_point_y < ymax_relative:
                                 road_point_x = int(road_point_x) - xmin_relative
                                 road_point_y = int(road_point_y) - ymin_relative
-                                debug_coord.append((road_point_x, road_point_y))
+                                # debug_coord.append((road_point_x, road_point_y))
                                 road_block_height = mnt_batch_array[road_point_x, road_point_y]
-                                schem.setBlock((road_point_x, road_block_height, road_point_y), GROUND_BLOCK_ROAD)
+                                schem.setBlock((road_point_x, road_block_height, road_point_y), block_template['osm']['road'])
                                 nb_road_block_placed += 1
-                    debug_coord = np.array(debug_coord)
-                    tqdm.write(f'OSM : {debug_coord[:,0].min()=} {debug_coord[:,0].max()=} {debug_coord[:,1].min()=} {debug_coord[:,1].max()=}')
-                    tqdm.write(f'Batch blocks available : {nb_road_block_available} | Placed : {nb_road_block_placed}')
+                    # debug_coord = np.array(debug_coord)
+                    # tqdm.write(f'OSM : {debug_coord[:,0].min()=} {debug_coord[:,0].max()=} {debug_coord[:,1].min()=} {debug_coord[:,1].max()=}')
+                    # tqdm.write(f'Batch blocks available : {nb_road_block_available} | Placed : {nb_road_block_placed}')
                 
 
                 if DO_LIDAR:
@@ -709,16 +691,16 @@ if __name__=='__main__':
 
 
                     # ----------------------- Write lidar data to schematic ---------------------- #
-                    do_No_Class(         filtered_points[1], choosen_template_point_classes, schem)
-                    do_Small_Vegetation( filtered_points[3], choosen_template_point_classes, schem)
-                    do_Medium_Vegetation(filtered_points[4], choosen_template_point_classes, schem)
-                    do_High_Vegetation(  filtered_points[5], choosen_template_point_classes, schem)
-                    do_Building(         filtered_points[6], choosen_template_point_classes, schem)
-                    do_Water(            filtered_points[9], choosen_template_point_classes, schem)
-                    do_Bridge(           filtered_points[17], choosen_template_point_classes, schem)
-                    do_Perennial_Soil(   filtered_points[64], choosen_template_point_classes, schem)
-                    do_Virtual_Points(   filtered_points[66], choosen_template_point_classes, schem)
-                    do_Miscellaneous(    filtered_points[67], choosen_template_point_classes, schem)
+                    do_No_Class(         filtered_points[1],  block_template, schem)
+                    do_Small_Vegetation( filtered_points[3],  block_template, schem)
+                    do_Medium_Vegetation(filtered_points[4],  block_template, schem)
+                    do_High_Vegetation(  filtered_points[5],  block_template, schem)
+                    do_Building(         filtered_points[6],  block_template, schem)
+                    do_Water(            filtered_points[9],  block_template, schem)
+                    do_Bridge(           filtered_points[17], block_template, schem)
+                    do_Perennial_Soil(   filtered_points[64], block_template, schem)
+                    do_Virtual_Points(   filtered_points[66], block_template, schem)
+                    do_Miscellaneous(    filtered_points[67], block_template, schem)
 
 
                 # --------------------------- Save batch schematic --------------------------- #
