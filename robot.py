@@ -9,7 +9,7 @@ mcfunction_folderpath = Path('data/mcfunctions/')
 
 TIME_AFTER_TP = 6
 TIME_AFTER_SCHEMATIC_LOAD = 5
-TIME_AFTER_PASTE = 10
+TIME_AFTER_PASTE = 15
 
 
 time.sleep(2)
@@ -43,6 +43,7 @@ for mcfunction_filepath in mcfunction_files:
             time.sleep(0.1)
             pyautogui.press('enter')        # execute command
 
+            if   line.startswith('/say'):             print(line)
             if   line.startswith('/tp'):              time.sleep(TIME_AFTER_TP)
             elif line.startswith('//schematic load'): time.sleep(TIME_AFTER_SCHEMATIC_LOAD)
             elif line.startswith('//paste'):          time.sleep(TIME_AFTER_PASTE)

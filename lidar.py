@@ -170,11 +170,42 @@ def dominant_voxel_points(
 
 
 
-def do_No_Class(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
+def do_No_Class(coordinates:list[tuple[np.float64, np.float64, np.float64]], block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
+    no_class_placed_blocks = list()
     for x,y,z in coordinates:
         current_block_state = schem.getBlockDataAt((int(x),int(z),int(y)))
         if current_block_state=='minecraft:air':
             schem.setBlock((int(x),int(z),int(y)), block_template['lidar']['No Class'])
+            no_class_placed_blocks.append((int(x),int(y),int(z)))
+    # Filter the blocks
+    block_to_delete = list()
+    for x,y,z in no_class_placed_blocks:
+        block_below = schem.getBlockDataAt((int(x),int(z-1),int(y)))
+        block_front = schem.getBlockDataAt((int(x+1),int(z),int(y)))
+        block_back = schem.getBlockDataAt((int(x-1),int(z),int(y)))
+        block_left = schem.getBlockDataAt((int(x),int(z),int(y-1)))
+        block_right = schem.getBlockDataAt((int(x),int(z),int(y+1)))
+        nb_adjacent_no_class_block = 0
+        if block_front==block_template['lidar']['No Class']:
+            nb_adjacent_no_class_block += 1
+        if block_back==block_template['lidar']['No Class']:
+            nb_adjacent_no_class_block += 1
+        if block_left==block_template['lidar']['No Class']:
+            nb_adjacent_no_class_block += 1
+        if block_right==block_template['lidar']['No Class']:
+            nb_adjacent_no_class_block += 1
+        
+        if nb_adjacent_no_class_block<2 or block_below=='minecraft:air':    # delete if the block have less then 2 adjacent no class block
+            block_to_delete.append((int(x),int(y),int(z)))
+
+    # actually delete the unwanted blocks (doing that after the filter to not delete the block while scanning)
+    for x,y,z in block_to_delete:
+        schem.setBlock((int(x),int(z),int(y)), 'minecraft:air')
+
+    tqdm.write(f'{len(coordinates)} No Class points | {len(no_class_placed_blocks)} block placed | {len(block_to_delete)} block deleted')
+
+
+
 
 def do_Small_Vegetation(coordinates, block_template:dict[str, dict[str, str]], schem:mcschematic.MCSchematic):
     for x,y,z in coordinates:
@@ -320,7 +351,7 @@ if __name__=='__main__':
     # point class : min nb points per voxel 
     lidar_point_class =  {
         1:2,            # No Class
-        # 2:9999,       # Ground
+        # 2:9999,       # Ground --> managed by mnt
         3:2,            # Small Vegetation
         4:2,            # Medium Vegetation
         5:2,            # High Vegetation
@@ -635,21 +666,22 @@ if __name__=='__main__':
                 
                 # tqdm.write(f'BATCH : {xmin_relative=} {xmax_relative=} {ymin_relative=} {ymax_relative=}')
 
-                # ------------------------------ MNT batch data ------------------------------ #
-                mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
-                mnt_batch_array = mnt_batch_array + z_axis_translate
+                if DO_MNT:
+                    # ------------------------------ MNT batch data ------------------------------ #
+                    mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
+                    mnt_batch_array = mnt_batch_array + z_axis_translate
 
 
-                # ------------------------ Write MNT data to schematic ----------------------- #
-                for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT block batch', leave=False):
-                    for y in range(mnt_batch_array.shape[1]):
-                        z = mnt_batch_array[x, y]
+                    # ------------------------ Write MNT data to schematic ----------------------- #
+                    for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT block batch', leave=False):
+                        for y in range(mnt_batch_array.shape[1]):
+                            z = mnt_batch_array[x, y]
 
-                        schem.setBlock((x, z, y), block_template['mnt']['ground_top'])
-                        for i in range(1, GROUND_THICKNESS+1):
-                            if z-i > LOWEST_MINECRAFT_POINT:
-                                schem.setBlock((x, z-i, y), block_template['mnt']['ground_below'])
-                # tqdm.write(f'MNT : {mnt_batch_array.shape=} {mnt_batch_array.min()=} | {mnt_batch_array.max()=}')
+                            schem.setBlock((x, z, y), block_template['mnt']['ground_top'])
+                            for i in range(1, GROUND_THICKNESS+1):
+                                if z-i > LOWEST_MINECRAFT_POINT:
+                                    schem.setBlock((x, z-i, y), block_template['mnt']['ground_below'])
+                    # tqdm.write(f'MNT : {mnt_batch_array.shape=} {mnt_batch_array.min()=} | {mnt_batch_array.max()=}')
 
                 # ------------------------------ OSM batch data ------------------------------ #
 
@@ -675,9 +707,9 @@ if __name__=='__main__':
                 if DO_LIDAR:
                     # ----------------------------- Lidar batch data ----------------------------- #
                     lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
-                                                    (lidar.x>=xmin_relative) & 
-                                                    (lidar.y<=ymax_relative) & 
-                                                    (lidar.y>=ymin_relative)]
+                                                      (lidar.x>=xmin_relative) & 
+                                                      (lidar.y<=ymax_relative) & 
+                                                      (lidar.y>=ymin_relative)]
                     
 
                     # Voxelize the points for each class
@@ -706,7 +738,6 @@ if __name__=='__main__':
 
 
                     # ----------------------- Write lidar data to schematic ---------------------- #
-                    do_No_Class(         filtered_points[1],  block_template, schem)
                     do_Small_Vegetation( filtered_points[3],  block_template, schem)
                     do_Medium_Vegetation(filtered_points[4],  block_template, schem)
                     do_High_Vegetation(  filtered_points[5],  block_template, schem)
@@ -716,6 +747,7 @@ if __name__=='__main__':
                     do_Perennial_Soil(   filtered_points[64], block_template, schem)
                     do_Virtual_Points(   filtered_points[66], block_template, schem)
                     do_Miscellaneous(    filtered_points[67], block_template, schem)
+                    do_No_Class(         filtered_points[1],  block_template, schem)
 
 
                 # --------------------------- Save batch schematic --------------------------- #
