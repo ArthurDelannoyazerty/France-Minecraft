@@ -744,8 +744,10 @@ if __name__=='__main__':
                                 road_point_y = int(road_point_y) - ymin_relative
                                 # debug_coord.append((road_point_x, road_point_y))
                                 road_block_height = mnt_batch_array[road_point_x, road_point_y]
-                                schem.setBlock((road_point_x, road_block_height, road_point_y), block_template['osm'][road_type])
-                                nb_road_block_placed += 1
+                                current_block = schem.getBlockDataAt((road_point_x, road_block_height, road_point_y))
+                                if current_block == block_template['mnt']['ground_top']:
+                                    schem.setBlock((road_point_x, road_block_height, road_point_y), block_template['osm'][road_type])
+                                    nb_road_block_placed += 1
                     # debug_coord = np.array(debug_coord)
                     # tqdm.write(f'OSM : {debug_coord[:,0].min()=} {debug_coord[:,0].max()=} {debug_coord[:,1].min()=} {debug_coord[:,1].max()=}')
                     # tqdm.write(f'Batch blocks available : {nb_road_block_available} | Placed : {nb_road_block_placed}')
