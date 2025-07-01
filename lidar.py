@@ -19,6 +19,7 @@ from pathlib import Path
 from utils.logger import setup_logging
 from script import find_occupied_voxels_vectorized
 from tqdm.auto import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 from osm_test import get_road_coordinates_by_type, get_terrain_coordinates_by_type
 
 logger = logging.getLogger(__name__)
@@ -297,12 +298,12 @@ if __name__=='__main__':
     schematic_folderpath  = Path('data/myschems')
     mcfunction_folderpath = Path('data/mcfunctions')
 
-    SEARCH_FOR_TILE_IN_ZONE = False
+    SEARCH_FOR_TILE_IN_ZONE = True
+    FORCE_TILE_GENERATION = False
 
     DO_MNT = True
     DO_OSM = True
     DO_LIDAR = True
-
 
 
     # Minecraft parameters
@@ -585,234 +586,246 @@ if __name__=='__main__':
     # ---------------------------------------------------------------------------- #
     #                           Loop for each tile found                           #
     # ---------------------------------------------------------------------------- #
+    with logging_redirect_tqdm():
+        for tile_bbox, tile_data in tqdm(tiles.items(), desc='Processing tiles'):
 
-    for tile_bbox, tile_data in tiles.items():
-        logger.info(f"Processing tile with bbox: {tile_bbox}")
+            # -------------------------- Initialize mc function -------------------------- #
 
-        # Check if both lidar and mnt are available for this tile
-        if 'lidar' not in tile_data or 'mnt' not in tile_data:
-            logger.warning(f"Skipping tile {tile_bbox} as it does not have both lidar and mnt data.")
-            continue
+            mcfunction_filepath:Path = mcfunction_folderpath / (tile_bbox + '.mcfunction')
+            text_mcfunction = '# Auto-generated MCFunction for placing lidar data\n'
+            text_mcfunction += '/gamerule doDaylightCycle false\n'
+            text_mcfunction += '/time set day\n'
+            text_mcfunction += '/gamerule randomTickSpeed 0\n'
+            text_mcfunction += '/gamemode spectator @s\n'
+            text_mcfunction += '/say Starting lidar placement...\n'
 
-        lidar_tile_filepath = Path(tile_data['lidar']['filepath'])
-        mnt_tile_filepath   = Path(tile_data['mnt']['filepath'])
-
-        # ------------------------------- Download & Process OSM ------------------------------- #
-        logger.info("Fetching and processing OSM data...")
-        
-        # bbox to tile polygon
-        zone_polygon_4326 = box(*tile_data['lidar']['bbox'])
-        transformer = pyproj.Transformer.from_crs("EPSG:2154", "EPSG:4326", always_xy=True).transform
-        zone_polygon_2154 = transform(transformer, zone_polygon_4326)
-
-        osm_roads = get_road_coordinates_by_type(zone_polygon_2154)
-        osm_terrains = get_terrain_coordinates_by_type(zone_polygon_2154)
-
-        # Clean OSM for MC
-        osm_roads    = {k:[(x,-y+1000) for x,y in v] for k,v in osm_roads.items()}
-        osm_terrains = {k:[(x,-y+1000) for x,y in v] for k,v in osm_terrains.items()}
-    
-        logger.info("OSM data fetched and processed.")
-
-        # --------------------------------- Load MNT --------------------------------- #
-        logger.info(f"Loading MNT file: {mnt_tile_filepath} ...")
-        mnt = rasterio.open(mnt_tile_filepath)
-        logger.info("MNT loaded")
-
-        # --------------------------------- clean MNT -------------------------------- #
-        logger.info("Cleaning MNT data...")
-        mnt_array:np.ndarray = mnt.read(1)
-        
-        def replace_errors_with_neighbor_mean(arr):
-            """Replace -9999.0 values with mean of valid neighbors (8-connected)."""
-            result = arr.copy()
-            error_mask = (arr == -9999.0)
+            # If the tile already exists and we do not force the tile re-generation, then do the next tile
+            if mcfunction_filepath.exists() and not FORCE_TILE_GENERATION:
+                logger.info(f'Tile {tile_bbox} already exists. Skipping it')
+                continue
             
-            for i, j in np.argwhere(error_mask):
-                # Get 3x3 neighborhood, handling boundaries
-                neighbors = arr[max(0, i-1):i+2, max(0, j-1):j+2]
-                # Get valid neighbors (not -9999.0 and not the center cell)
-                valid = neighbors[(neighbors != -9999.0)]
-                if len(valid) > 1:  # Exclude center cell
-                    valid = valid[valid != arr[i, j]]  # Remove center if it somehow got included
-                
-                if len(valid) > 0:
-                    result[i, j] = np.mean(valid)
-            return result
+            logger.info(f"Processing tile with bbox: {tile_bbox}")
+
+            # Check if both lidar and mnt are available for this tile
+            if 'lidar' not in tile_data or 'mnt' not in tile_data:
+                logger.warning(f"Skipping tile {tile_bbox} as it does not have both lidar and mnt data.")
+                continue
+
+            lidar_tile_filepath = Path(tile_data['lidar']['filepath'])
+            mnt_tile_filepath   = Path(tile_data['mnt']['filepath'])
+
+            # ------------------------------- Download & Process OSM ------------------------------- #
+            logger.info("Fetching and processing OSM data...")
+            
+            # bbox to tile polygon
+            zone_polygon_4326 = box(*tile_data['lidar']['bbox'])
+            transformer = pyproj.Transformer.from_crs("EPSG:2154", "EPSG:4326", always_xy=True).transform
+            zone_polygon_2154 = transform(transformer, zone_polygon_4326)
+
+            try:
+                osm_roads = get_road_coordinates_by_type(zone_polygon_2154)
+                osm_terrains = get_terrain_coordinates_by_type(zone_polygon_2154)
+            except:
+                logger.exception(f'Error happened during getting OSM data. Skipping tile bbox {tile_bbox}')
+                continue
+
+            # Clean OSM for MC
+            osm_roads    = {k:[(x,-y+1000) for x,y in v] for k,v in osm_roads.items()}
+            osm_terrains = {k:[(x,-y+1000) for x,y in v] for k,v in osm_terrains.items()}
         
-        
-        mnt_array = replace_errors_with_neighbor_mean(mnt_array)
+            logger.info("OSM data fetched and processed.")
 
-        # Pooling the MNT array to transform a mnt resolution of 0.5m to 1m
-        M, N = mnt_array.shape
-        K, L = 2, 2
-        MK, NL = M//K, N//L
-        pooled_mnt_array:np.ndarray = mnt_array.reshape(MK, K, NL, L).mean(axis=(1, 3))  # Average pooling
-        mnt_array = pooled_mnt_array.astype(np.int32)          # round the values, int16 ok but strange errors in mcschematic so int32 instead
-        lowest_coordinate = mnt_array.min()
+            # --------------------------------- Load MNT --------------------------------- #
+            logger.info(f"Loading MNT file: {mnt_tile_filepath} ...")
+            mnt = rasterio.open(mnt_tile_filepath)
+            logger.info("MNT loaded")
 
-        # Transform the coordinate for the minecraft world
-        mnt_array = mnt_array.T
-        
-        logger.info("MNT data cleaned")
-
-
-        # ------------------------------ Load Lidar Data ----------------------------- #
-        logger.info(f"Loading lidar file: {lidar_tile_filepath} ...")
-        lidar = laspy.read(lidar_tile_filepath)
-        logger.info(f"Lidar loaded | containing {len(lidar.points)} points.")
-
-
-        # -------------------------------- Clean Lidar ------------------------------- #
-
-        tile_min_x, tile_min_y, tile_max_x, tile_max_y = tile_data['lidar']['bbox']
-        lidar.x = np.array(lidar.x) - tile_min_x
-        lidar.y = (-np.array(lidar.y) + tile_min_y + (tile_max_y - tile_min_y))
-
-
-
-        # ------------------------- Calculate Global Z Offset ------------------------ #
-        if MANUAL_Z_AXIS_TRANSLATE:
-            z_axis_translate = MANUAL_Z_AXIS_TRANSLATE_VALUE
-        else:
-            z_axis_translate:int = LOWEST_MINECRAFT_POINT - lowest_coordinate
-        logger.info(f"Calculated Z translation: {z_axis_translate:.2f} (Real min Z: {lowest_coordinate:.2f} -> MC Y: {LOWEST_MINECRAFT_POINT})")
-
-
-        # -------------------------- Initialize mc function -------------------------- #
-
-        mcfunction_filepath = mcfunction_folderpath / (tile_bbox + '.mcfunction')
-        text_mcfunction = '# Auto-generated MCFunction for placing lidar data\n'
-        text_mcfunction += '/gamerule doDaylightCycle false\n'
-        text_mcfunction += '/time set day\n'
-        text_mcfunction += '/gamerule randomTickSpeed 0\n'
-        text_mcfunction += '/gamemode spectator @s\n'
-        text_mcfunction += '/say Starting lidar placement...\n'
-
-        # ----------------------------- Batch Calculation ---------------------------- #
-        tile_edge_size = mnt_array.shape[0] 
-        batch_size = tile_edge_size // BATCH_PER_PRODUCT_SIDE
-
-
-        for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis', position=0):
-            for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis', leave=False, position=1):
-
-                schem = mcschematic.MCSchematic()
-
-                # ------------------------ Calculate batch coordinates ----------------------- #
-                xmin_relative = batch_size * batch_x
-                xmax_relative = batch_size * (batch_x + 1)
-                ymin_relative = batch_size * batch_y
-                ymax_relative = batch_size * (batch_y + 1)                    
-
-                xmin_absolute = tile_min_x + xmin_relative
-                xmax_absolute = tile_min_x + xmax_relative
-                ymin_absolute = tile_min_y + ymin_relative
-                ymax_absolute = tile_min_y + ymax_relative
-
+            # --------------------------------- clean MNT -------------------------------- #
+            logger.info("Cleaning MNT data...")
+            mnt_array:np.ndarray = mnt.read(1)
+            
+            def replace_errors_with_neighbor_mean(arr):
+                """Replace -9999.0 values with mean of valid neighbors (8-connected)."""
+                result = arr.copy()
+                error_mask = (arr == -9999.0)
                 
-                # tqdm.write(f'BATCH : {xmin_relative=} {xmax_relative=} {ymin_relative=} {ymax_relative=}')
+                for i, j in np.argwhere(error_mask):
+                    # Get 3x3 neighborhood, handling boundaries
+                    neighbors = arr[max(0, i-1):i+2, max(0, j-1):j+2]
+                    # Get valid neighbors (not -9999.0 and not the center cell)
+                    valid = neighbors[(neighbors != -9999.0)]
+                    if len(valid) > 1:  # Exclude center cell
+                        valid = valid[valid != arr[i, j]]  # Remove center if it somehow got included
+                    
+                    if len(valid) > 0:
+                        result[i, j] = np.mean(valid)
+                return result
+            
+            
+            mnt_array = replace_errors_with_neighbor_mean(mnt_array)
 
-                if DO_MNT:
-                    # ------------------------------ MNT batch data ------------------------------ #
-                    mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
-                    mnt_batch_array = mnt_batch_array + z_axis_translate
+            # Pooling the MNT array to transform a mnt resolution of 0.5m to 1m
+            M, N = mnt_array.shape
+            K, L = 2, 2
+            MK, NL = M//K, N//L
+            pooled_mnt_array:np.ndarray = mnt_array.reshape(MK, K, NL, L).mean(axis=(1, 3))  # Average pooling
+            mnt_array = pooled_mnt_array.astype(np.int32)          # round the values, int16 ok but strange errors in mcschematic so int32 instead
+            lowest_coordinate = mnt_array.min()
+
+            # Transform the coordinate for the minecraft world
+            mnt_array = mnt_array.T
+            
+            logger.info("MNT data cleaned")
 
 
-                    # ------------------------ Write MNT data to schematic ----------------------- #
-                    for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT block batch', leave=False):
-                        for y in range(mnt_batch_array.shape[1]):
-                            z = mnt_batch_array[x, y]
+            # ------------------------------ Load Lidar Data ----------------------------- #
+            logger.info(f"Loading lidar file: {lidar_tile_filepath} ...")
+            lidar = laspy.read(lidar_tile_filepath)
+            logger.info(f"Lidar loaded | containing {len(lidar.points)} points.")
 
-                            schem.setBlock((x, z, y), block_template['mnt']['ground_top'])
-                            for i in range(1, GROUND_THICKNESS+1):
-                                if z-i > LOWEST_MINECRAFT_POINT:
-                                    schem.setBlock((x, z-i, y), block_template['mnt']['ground_below'])
-                    # tqdm.write(f'MNT : {mnt_batch_array.shape=} {mnt_batch_array.min()=} | {mnt_batch_array.max()=}')
 
-                # ------------------------------ OSM batch data ------------------------------ #
+            # -------------------------------- Clean Lidar ------------------------------- #
 
-                if DO_OSM:
-                    # debug_coord = list()
-                    nb_road_block_available = 0
-                    nb_road_block_placed = 0
-                    for road_type, road_data in tqdm(osm_roads.items(), desc='Placing OSM roads', leave=False):
-                        for road_point_x, road_point_y in tqdm(road_data, desc=f'Placing OSM points ({road_type})', leave=False):
-                            nb_road_block_available += 1
-                            if xmin_relative <= road_point_x < xmax_relative and ymin_relative <= road_point_y < ymax_relative:
-                                road_point_x = int(road_point_x) - xmin_relative
-                                road_point_y = int(road_point_y) - ymin_relative
-                                # debug_coord.append((road_point_x, road_point_y))
-                                road_block_height = mnt_batch_array[road_point_x, road_point_y]
-                                current_block = schem.getBlockDataAt((road_point_x, road_block_height, road_point_y))
-                                if current_block == block_template['mnt']['ground_top']:
-                                    schem.setBlock((road_point_x, road_block_height, road_point_y), block_template['osm'][road_type])
-                                    nb_road_block_placed += 1
-                    # debug_coord = np.array(debug_coord)
-                    # tqdm.write(f'OSM : {debug_coord[:,0].min()=} {debug_coord[:,0].max()=} {debug_coord[:,1].min()=} {debug_coord[:,1].max()=}')
-                    # tqdm.write(f'Batch blocks available : {nb_road_block_available} | Placed : {nb_road_block_placed}')
-                
+            tile_min_x, tile_min_y, tile_max_x, tile_max_y = tile_data['lidar']['bbox']
+            lidar.x = np.array(lidar.x) - tile_min_x
+            lidar.y = (-np.array(lidar.y) + tile_min_y + (tile_max_y - tile_min_y))
 
-                if DO_LIDAR:
-                    # ----------------------------- Lidar batch data ----------------------------- #
-                    lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
-                                                      (lidar.x>=xmin_relative) & 
-                                                      (lidar.y<=ymax_relative) & 
-                                                      (lidar.y>=ymin_relative)]
+
+
+            # ------------------------- Calculate Global Z Offset ------------------------ #
+            if MANUAL_Z_AXIS_TRANSLATE:
+                z_axis_translate = MANUAL_Z_AXIS_TRANSLATE_VALUE
+            else:
+                z_axis_translate:int = LOWEST_MINECRAFT_POINT - lowest_coordinate
+            logger.info(f"Calculated Z translation: {z_axis_translate:.2f} (Real min Z: {lowest_coordinate:.2f} -> MC Y: {LOWEST_MINECRAFT_POINT})")
+
+
+            # ----------------------------- Batch Calculation ---------------------------- #
+            tile_edge_size = mnt_array.shape[0] 
+            batch_size = tile_edge_size // BATCH_PER_PRODUCT_SIDE
+
+
+            for batch_x in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches X axis', position=0):
+                for batch_y in tqdm(range(BATCH_PER_PRODUCT_SIDE), desc='Processing batches Y axis', leave=False, position=1):
+
+                    schem = mcschematic.MCSchematic()
+
+                    # ------------------------ Calculate batch coordinates ----------------------- #
+                    xmin_relative = batch_size * batch_x
+                    xmax_relative = batch_size * (batch_x + 1)
+                    ymin_relative = batch_size * batch_y
+                    ymax_relative = batch_size * (batch_y + 1)                    
+
+                    xmin_absolute = tile_min_x + xmin_relative
+                    xmax_absolute = tile_min_x + xmax_relative
+                    ymin_absolute = tile_min_y + ymin_relative
+                    ymax_absolute = tile_min_y + ymax_relative
+
+                    
+                    # tqdm.write(f'BATCH : {xmin_relative=} {xmax_relative=} {ymin_relative=} {ymax_relative=}')
+
+                    if DO_MNT:
+                        # ------------------------------ MNT batch data ------------------------------ #
+                        mnt_batch_array:np.ndarray = mnt_array[xmin_relative:xmax_relative, ymin_relative:ymax_relative]
+                        mnt_batch_array = mnt_batch_array + z_axis_translate
+
+
+                        # ------------------------ Write MNT data to schematic ----------------------- #
+                        for x in tqdm(range(mnt_batch_array.shape[0]), desc='Placing MNT block batch', leave=False):
+                            for y in range(mnt_batch_array.shape[1]):
+                                z = mnt_batch_array[x, y]
+
+                                schem.setBlock((x, z, y), block_template['mnt']['ground_top'])
+                                for i in range(1, GROUND_THICKNESS+1):
+                                    if z-i > LOWEST_MINECRAFT_POINT:
+                                        schem.setBlock((x, z-i, y), block_template['mnt']['ground_below'])
+                        # tqdm.write(f'MNT : {mnt_batch_array.shape=} {mnt_batch_array.min()=} | {mnt_batch_array.max()=}')
+
+                    # ------------------------------ OSM batch data ------------------------------ #
+
+                    if DO_OSM:
+                        # debug_coord = list()
+                        nb_road_block_available = 0
+                        nb_road_block_placed = 0
+                        for road_type, road_data in tqdm(osm_roads.items(), desc='Placing OSM roads', leave=False):
+                            try:
+                                for road_point_x, road_point_y in tqdm(road_data, desc=f'Placing OSM points ({road_type})', leave=False):
+                                    nb_road_block_available += 1
+                                    if xmin_relative <= road_point_x < xmax_relative and ymin_relative <= road_point_y < ymax_relative:
+                                        road_point_x = int(road_point_x) - xmin_relative
+                                        road_point_y = int(road_point_y) - ymin_relative
+                                        # debug_coord.append((road_point_x, road_point_y))
+                                        road_block_height = mnt_batch_array[road_point_x, road_point_y]
+                                        current_block = schem.getBlockDataAt((road_point_x, road_block_height, road_point_y))
+                                        if current_block == block_template['mnt']['ground_top']:
+                                            schem.setBlock((road_point_x, road_block_height, road_point_y), block_template['osm'][road_type])
+                                            nb_road_block_placed += 1
+                            except: continue
+                        # debug_coord = np.array(debug_coord)
+                        # tqdm.write(f'OSM : {debug_coord[:,0].min()=} {debug_coord[:,0].max()=} {debug_coord[:,1].min()=} {debug_coord[:,1].max()=}')
+                        # tqdm.write(f'Batch blocks available : {nb_road_block_available} | Placed : {nb_road_block_placed}')
                     
 
-                    # Voxelize the points for each class
-                    point_coordinates = {point_class:list() for point_class in lidar_point_class.keys()}     # {1: [(x1,y1,z1),...], ...}
-
-                    for point_class, min_points_per_voxel in tqdm(lidar_point_class.items(), desc='Voxelize lidar points', leave=False):
-                        mask = lidar_batch.classification == point_class
-                        batch_ground_points_no_ground = lidar_batch[mask]
-
-                        x = batch_ground_points_no_ground.x
-                        y = batch_ground_points_no_ground.y
-                        z = batch_ground_points_no_ground.z + z_axis_translate
-                        xyz_no_ground = np.vstack([x, y, z]).T
-
-                        points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
+                    if DO_LIDAR:
+                        # ----------------------------- Lidar batch data ----------------------------- #
+                        lidar_batch:laspy.LasData = lidar[(lidar.x<=xmax_relative) & 
+                                                        (lidar.x>=xmin_relative) & 
+                                                        (lidar.y<=ymax_relative) & 
+                                                        (lidar.y>=ymin_relative)]
                         
-                        voxel_origins_relative_m = find_occupied_voxels_vectorized(
-                            points_relative_to_voxel_origin,
-                            voxel_size=VOXEL_SIDE,
-                            min_points_per_voxel=min_points_per_voxel
-                        )
-                        point_coordinates[point_class] = voxel_origins_relative_m
 
-                    dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates, grid_size=batch_size)
+                        # Voxelize the points for each class
+                        point_coordinates = {point_class:list() for point_class in lidar_point_class.keys()}     # {1: [(x1,y1,z1),...], ...}
+
+                        for point_class, min_points_per_voxel in tqdm(lidar_point_class.items(), desc='Voxelize lidar points', leave=False):
+                            mask = lidar_batch.classification == point_class
+                            batch_ground_points_no_ground = lidar_batch[mask]
+
+                            x = batch_ground_points_no_ground.x
+                            y = batch_ground_points_no_ground.y
+                            z = batch_ground_points_no_ground.z + z_axis_translate
+                            xyz_no_ground = np.vstack([x, y, z]).T
+
+                            points_relative_to_voxel_origin = xyz_no_ground - [xmin_relative, ymin_relative, 0]
+                            
+                            voxel_origins_relative_m = find_occupied_voxels_vectorized(
+                                points_relative_to_voxel_origin,
+                                voxel_size=VOXEL_SIDE,
+                                min_points_per_voxel=min_points_per_voxel
+                            )
+                            point_coordinates[point_class] = voxel_origins_relative_m
+
+                        dominant_per_voxel, filtered_points = dominant_voxel_points(point_coordinates, grid_size=batch_size)
 
 
 
-                    # ----------------------- Write lidar data to schematic ---------------------- #
-                    do_Small_Vegetation( filtered_points[3],  block_template, schem)
-                    do_Medium_Vegetation(filtered_points[4],  block_template, schem)
-                    do_High_Vegetation(  filtered_points[5],  block_template, schem)
-                    do_Building(         filtered_points[6],  block_template, schem)
-                    do_Water(            filtered_points[9],  block_template, schem)
-                    do_Bridge(           filtered_points[17], block_template, schem)
-                    do_Perennial_Soil(   filtered_points[64], block_template, schem)
-                    do_Virtual_Points(   filtered_points[66], block_template, schem)
-                    do_Miscellaneous(    filtered_points[67], block_template, schem)
-                    do_No_Class(         filtered_points[1],  block_template, schem)
+                        # ----------------------- Write lidar data to schematic ---------------------- #
+                        do_Small_Vegetation( filtered_points[3],  block_template, schem)
+                        do_Medium_Vegetation(filtered_points[4],  block_template, schem)
+                        do_High_Vegetation(  filtered_points[5],  block_template, schem)
+                        do_Building(         filtered_points[6],  block_template, schem)
+                        do_Water(            filtered_points[9],  block_template, schem)
+                        do_Bridge(           filtered_points[17], block_template, schem)
+                        do_Perennial_Soil(   filtered_points[64], block_template, schem)
+                        do_Virtual_Points(   filtered_points[66], block_template, schem)
+                        do_Miscellaneous(    filtered_points[67], block_template, schem)
+                        do_No_Class(         filtered_points[1],  block_template, schem)
 
 
-                # --------------------------- Save batch schematic --------------------------- #
-                schem_batch_filename = f'xmin~{xmin_absolute}_ymin~{ymin_absolute}_size~{tile_edge_size}'
-                schem.save(str(schematic_folderpath), schem_batch_filename, mcschematic.Version.JE_1_21)
+                    # --------------------------- Save batch schematic --------------------------- #
+                    schem_batch_filename = f'xmin~{xmin_absolute}_ymin~{ymin_absolute}_size~{tile_edge_size}'
+                    schem.save(str(schematic_folderpath), schem_batch_filename, mcschematic.Version.JE_1_21)
 
-                # ---------------------------- Add batch functions --------------------------- #
-                text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y + 1}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
-                text_mcfunction += f'/tp @s {xmin_absolute} 0 {ymin_absolute}\n'
-                text_mcfunction += f'//schematic load {schem_batch_filename}\n'
-                text_mcfunction +=  '//paste -a\n'
+                    # ---------------------------- Add batch functions --------------------------- #
+                    text_mcfunction += f'\n/say Placing Batch {batch_x*BATCH_PER_PRODUCT_SIDE + batch_y + 1}/{BATCH_PER_PRODUCT_SIDE**2} at X={xmin_absolute} Z={ymin_absolute}\n'
+                    text_mcfunction += f'/tp @s {xmin_absolute} 0 {ymin_absolute}\n'
+                    text_mcfunction += f'//schematic load {schem_batch_filename}\n'
+                    text_mcfunction +=  '//paste -a\n'
 
-        # ---------------------------- Finalize MCFunction --------------------------- #
-        text_mcfunction += '\nsay Lidar placement complete!\n'
-        text_mcfunction += 'gamemode creative @s\n' # Set player back to creative
-        with open(mcfunction_filepath, 'w') as f: 
-            f.write(text_mcfunction)
-        logger.info(f"Generated MCFunction file: {mcfunction_filepath}")
-        logger.info("--- Processing Finished ---")
+            # ---------------------------- Finalize MCFunction --------------------------- #
+            text_mcfunction += '\nsay Lidar placement complete!\n'
+            text_mcfunction += 'gamemode creative @s\n' # Set player back to creative
+            with open(mcfunction_filepath, 'w') as f: 
+                f.write(text_mcfunction)
+            logger.info(f"Generated MCFunction file: {mcfunction_filepath}")
+            logger.info("--- Processing Finished ---")
