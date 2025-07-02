@@ -718,8 +718,8 @@ if __name__=='__main__':
 
                     xmin_absolute = tile_min_x + xmin_relative
                     xmax_absolute = tile_min_x + xmax_relative
-                    ymin_absolute = tile_min_y + ymin_relative
-                    ymax_absolute = tile_min_y + ymax_relative
+                    ymin_absolute = -tile_min_y + ymin_relative     # Invert the Y axis to oreder the vertical tiling (bc north is inverse of lambert esqg)
+                    ymax_absolute = -tile_min_y + ymax_relative
 
                     
                     # tqdm.write(f'BATCH : {xmin_relative=} {xmax_relative=} {ymin_relative=} {ymax_relative=}')
