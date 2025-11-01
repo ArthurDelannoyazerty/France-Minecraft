@@ -178,7 +178,7 @@ class TileProcessor:
                 self.writer.place_blocks(road_points_in_batch, block_id, {'is_road': True})
     
 
-    def _process_lidar_batch(self, lidar_data, mnt_batch_mc, batch_info: dict, z_offset: int):
+    def _process_lidar_batch(self, lidar_data, batch_info: dict, z_offset: int):
         """Processes lidar points for a single batch."""
         if not config.DO_LIDAR_PROCESSING:
             return

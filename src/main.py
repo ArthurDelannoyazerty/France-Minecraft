@@ -68,7 +68,7 @@ def main():
     try:
         # Updated instantiation to include the target dimension
         writer = WorldWriter(
-            world_path=minecraft_world_path,
+            world_path=str(minecraft_world_path),
             dimension=config.TARGET_DIMENSION
         )
     except FileNotFoundError as e:
@@ -78,10 +78,11 @@ def main():
     # 5. Process each tile
     for tile_bbox_str, tile_data in tqdm(compatible_tiles.items(), desc="Processing All Tiles"):
         
-        mcfunction_file = config.MCFUNCTIONS_DIR / f'{tile_bbox_str}.mcfunction'
-        if mcfunction_file.exists() and not config.FORCE_TILE_GENERATION:
-            logging.info(f"Tile {tile_bbox_str} already processed. Skipping.")
-            continue
+        if isinstance(writer, SchematicWriter):
+            mcfunction_file = config.MCFUNCTIONS_DIR / f'{tile_bbox_str}.mcfunction'
+            if mcfunction_file.exists() and not config.FORCE_TILE_GENERATION:
+                logging.info(f"Tile {tile_bbox_str} already processed (mcfunction exists). Skipping.")
+                continue
             
         logging.info(f"Processing tile with bbox: {tile_bbox_str}")
 
@@ -95,10 +96,11 @@ def main():
         # This runs the full pipeline for one tile
         generated_artifacts = processor.run()
 
-        # 6. Create a master mcfunction for the processed tile
+        # 6. Create a master mcfunction only if using the SchematicWriter
         if isinstance(writer, SchematicWriter):
             create_mcfunction(tile_bbox_str, generated_artifacts)
 
+    # Finalize will save and close the world for WorldWriter, or do nothing for SchematicWriter.
     writer.finalize()
 
     logging.info("--- Pipeline Finished ---")

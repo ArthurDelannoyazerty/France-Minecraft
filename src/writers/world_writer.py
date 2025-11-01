@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple
 import amulet
 import numpy as np
 from amulet.api.block import Block
-from amulet.api.errors import ChunkLoadError
+from amulet.api.errors import ChunkDoesNotExist, ChunkLoadError
 from amulet.utils.world_utils import block_coords_to_chunk_coords
 from tqdm.auto import tqdm
 
@@ -89,8 +89,10 @@ class WorldWriter(BaseWriter):
 
     def _add_to_buffer(self, abs_x: int, abs_y: int, abs_z: int, block_id: int):
         """Adds a block's internal ID to the chunk buffer."""
-        if not (self.world.min_y <= abs_y < self.world.max_y):
-            return  # Don't place blocks outside the world's height limits
+        # MODIFICATION: Use height limits from config instead of from the world file.
+        # This allows placing blocks outside of vanilla limits when using mods.
+        if not (config.LOWEST_MINECRAFT_POINT <= abs_y < config.HIGHEST_MINECRAFT_POINT):
+            return  # Don't place blocks outside the configured height limits
 
         cx, cz = block_coords_to_chunk_coords(abs_x, abs_z)
         offset_x, offset_z = abs_x - 16 * cx, abs_z - 16 * cz
@@ -151,8 +153,9 @@ class WorldWriter(BaseWriter):
             # Place the top block of the building
             self._add_to_buffer(abs_x, abs_y, abs_z, block_id)
 
-            # Extend downwards until a non-air block is hit
-            for y_below in range(abs_y - 1, self.world.min_y, -1):
+            # MODIFICATION: Use the lower bound from config for the loop limit.
+            # This ensures buildings can extend down into negative Y coordinates.
+            for y_below in range(abs_y - 1, config.LOWEST_MINECRAFT_POINT, -1):
                 try:
                     # This is slow, but necessary to know where the ground is.
                     # A better approach might be to pass the MNT array to this function.
@@ -170,7 +173,13 @@ class WorldWriter(BaseWriter):
         logger.info(f"Writing data for {len(self._chunk_buffer)} chunks...")
         for (cx, cz), blocks in tqdm(self._chunk_buffer.items(), desc="Writing Chunks", leave=False):
             try:
-                chunk = self.world.get_chunk(cx, cz, self.dimension)
+
+                try:
+                    # First, try to get the chunk.
+                    chunk = self.world.get_chunk(cx, cz, self.dimension)
+                except (ChunkDoesNotExist, ChunkLoadError):
+                    # If it doesn't exist or fails to load (common for new areas), create it.
+                    chunk = self.world.create_chunk(cx, cz, self.dimension)
                 
                 # Create a numpy array of block IDs to write
                 # This is much faster than setting block by block
@@ -185,7 +194,18 @@ class WorldWriter(BaseWriter):
                 chunk.changed = True
 
             except ChunkLoadError:
-                logger.warning(f"Could not load chunk at ({cx}, {cz}). Some blocks may not be placed.")
+                # If a chunk doesn't exist, Amulet should create it. If it fails to load,
+                # it might be corrupted, but we can try creating a new one to place blocks.
+                try:
+                    logger.warning(f"Could not load chunk at ({cx}, {cz}). Trying to create a new one.")
+                    chunk = self.world.create_chunk(cx, cz, self.dimension)
+                    block_array = chunk.blocks
+                    for (x, y, z), block_internal_id in blocks.items():
+                        block_array[x, y, z] = block_internal_id
+                    chunk.blocks = block_array
+                    chunk.changed = True
+                except Exception as e:
+                    logger.error(f"Failed to create new chunk at ({cx}, {cz}): {e}")
             except Exception as e:
                 logger.error(f"An unexpected error occurred while writing to chunk ({cx}, {cz}): {e}")
         

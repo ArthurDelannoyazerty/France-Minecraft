@@ -19,7 +19,7 @@ LIDAR_CATALOG_FILE = GRID_DIR / 'lidar_public_tiles_available.geojson'
 MNT_CATALOG_FILE = GRID_DIR / 'mnt_public_tiles_available.geojson'
 
 # Path to the GeoJSON file defining the area of interest
-ZONE_GEOJSON_FILE = DATA_DIR / 'zone_test_caussol.geojson'
+ZONE_GEOJSON_FILE = DATA_DIR / 'zone_test_square.geojson'
 
 # --- PROCESSING FLAGS ---
 # Set to False to use hardcoded test tiles instead of searching in the zone
@@ -43,7 +43,7 @@ TARGET_DIMENSION = "minecraft:overworld"
 
 # If True, Z-axis is manually offset by MANUAL_Z_AXIS_OFFSET
 MANUAL_Z_AXIS_TRANSLATE = True
-MANUAL_Z_AXIS_OFFSET = -2000
+MANUAL_Z_AXIS_OFFSET = 0#-2000
 
 # Minecraft world height limits
 LOWEST_MINECRAFT_POINT = -60
