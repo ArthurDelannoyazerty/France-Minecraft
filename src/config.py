@@ -33,6 +33,14 @@ DO_OSM_PROCESSING = True
 DO_LIDAR_PROCESSING = True
 
 # --- MINECRAFT WORLD PARAMETERS ---
+    
+# --- MINECRAFT WORLD PARAMETERS ---
+# Set to True to automatically create a backup .zip of the world before writing.
+AUTO_BACKUP_WORLD = True
+
+# The dimension to write to ('minecraft:overworld', 'minecraft:the_nether', 'minecraft:the_end')
+TARGET_DIMENSION = "minecraft:overworld"
+
 # If True, Z-axis is manually offset by MANUAL_Z_AXIS_OFFSET
 MANUAL_Z_AXIS_TRANSLATE = True
 MANUAL_Z_AXIS_OFFSET = -2000
@@ -44,6 +52,7 @@ HIGHEST_MINECRAFT_POINT = 319
 # How many blocks deep the ground layer should be
 GROUND_THICKNESS = 16
 
+  
 # --- TILE PROCESSING PARAMETERS ---
 # A 1km x 1km tile is split into (N x N) batches.
 # BATCH_PER_SIDE = 4 means the tile is split into 16 batches (4x4).

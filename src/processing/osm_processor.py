@@ -227,6 +227,11 @@ def get_road_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple
     # 3. Assign feature values and buffer distances
     gdf_with_values = assign_feature_values(gdf, config.OSM_FEATURE_VALUE_MAP, config.OSM_TAG_TYPE_PRIORITY)
 
+    if 'highway' not in gdf_with_values.columns:
+        # If no highways were found in the Overpass query for this tile, return the default empty dictionary for all road types.
+        print("No 'highway' features found in this tile.")
+        return {road_type: [] for road_type in config.OSM_ROAD_WIDTH_MAP.keys()}
+
     # 4. Filter for roads
     roads_gdf = gdf_with_values[gdf_with_values['highway'].notna()].copy()
     

@@ -4,15 +4,16 @@ from pathlib import Path
 
 from tqdm.auto import tqdm
 
-import config
-from processing.tile_processor import TileProcessor
+from src import config
 from src.data_manager import (
     download_ign_catalogs,
     download_tiles,
     find_intersecting_tiles,
     init_folders,
 )
-from writers.schematic_writer import SchematicWriter
+from src.processing.tile_processor import TileProcessor
+from src.writers.schematic_writer import SchematicWriter
+from src.writers.world_writer import WorldWriter
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -55,10 +56,25 @@ def main():
     download_tiles(compatible_tiles.values())
 
     # 4. Initialize the desired writer
-    # To switch to a different output, you would just change this line:
-    # writer = DirectToWorldWriter(...)
-    writer = SchematicWriter(output_dir=str(config.SCHEMATICS_DIR))
+    # --- CHOOSE YOUR WRITER ---
+    # A) Schematic Writer: Generates .schematic files
+    # writer = SchematicWriter(output_dir=str(config.SCHEMATICS_DIR))
 
+    # B) Direct-to-World Writer: Edits a world file directly.
+    #    Provide the path to your Minecraft save folder.
+    minecraft_saves_filepath = Path('C:/Users/Arthur/games/curseforge/Instances/bte_2000/saves')
+    minecraft_save_name = "test36"
+    minecraft_world_path = minecraft_saves_filepath / minecraft_save_name
+    try:
+        # Updated instantiation to include the target dimension
+        writer = WorldWriter(
+            world_path=minecraft_world_path,
+            dimension=config.TARGET_DIMENSION
+        )
+    except FileNotFoundError as e:
+        logging.error(f"{e}. Please update the 'minecraft_world_path' in main.py.")
+        return
+    
     # 5. Process each tile
     for tile_bbox_str, tile_data in tqdm(compatible_tiles.items(), desc="Processing All Tiles"):
         
@@ -82,6 +98,8 @@ def main():
         # 6. Create a master mcfunction for the processed tile
         if isinstance(writer, SchematicWriter):
             create_mcfunction(tile_bbox_str, generated_artifacts)
+
+    writer.finalize()
 
     logging.info("--- Pipeline Finished ---")
 
