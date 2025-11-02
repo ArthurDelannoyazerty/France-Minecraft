@@ -39,7 +39,7 @@ class WorldWriter(BaseWriter):
 
 
 
-        self.air = self.world.block_palette.get_add_block(Block("minecraft", "air"))
+        self.air = Block("universal_minecraft", "air")
         self._block_cache: Dict[str, Block] = {}
         self._block_palette_cache: Dict[Block, int] = {}
         
@@ -109,14 +109,21 @@ class WorldWriter(BaseWriter):
         top_block_id = self.world.block_palette.get_add_block(top_block_univ)
         below_block_id = self.world.block_palette.get_add_block(below_block_univ)
 
+        done_log = False
+
         height, width = ground_array.shape
         for x_rel in tqdm(range(height), desc='Buffering Ground', leave=False):
+            done_log=False
             for y_rel in range(width):
                 abs_x = self.batch_origin_x + x_rel
                 abs_z = self.batch_origin_z + y_rel
                 abs_y_top = int(ground_array[x_rel, y_rel])
 
                 self._add_to_buffer(abs_x, abs_y_top, abs_z, top_block_id)
+                
+                if not done_log:
+                    logger.info(f'bloack added. X Y Z: {abs_x} {abs_y_top} {abs_z}')
+
                 for i in range(1, thickness + 1):
                     self._add_to_buffer(abs_x, abs_y_top - i, abs_z, below_block_id)
 
@@ -187,8 +194,8 @@ class WorldWriter(BaseWriter):
                 
                 for (x, y, z), block_internal_id in blocks.items():
                     # Only write if the block is currently air
-                    if chunk.block_palette[block_array[x, y, z]] == self.air:
-                        block_array[x, y, z] = block_internal_id
+                    # if chunk.block_palette[block_array[x, y, z]] == self.air:
+                    block_array[x, y, z] = block_internal_id
                 
                 chunk.blocks = block_array
                 chunk.changed = True

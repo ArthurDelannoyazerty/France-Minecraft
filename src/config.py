@@ -46,7 +46,7 @@ MANUAL_Z_AXIS_TRANSLATE = True
 MANUAL_Z_AXIS_OFFSET = 0#-2000
 
 # Minecraft world height limits
-LOWEST_MINECRAFT_POINT = -60
+LOWEST_MINECRAFT_POINT = -2000
 HIGHEST_MINECRAFT_POINT = 319
 
 # How many blocks deep the ground layer should be
