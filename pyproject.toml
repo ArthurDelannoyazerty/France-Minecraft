@@ -1,0 +1,19 @@
+[project]
+name = "france-minecraft"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "amulet-core>=1.9.32",
+    "geopandas>=1.0.1",
+    "laspy[laszip,lazrs]>=2.5.4",
+    "mcschematic>=11.4.3",
+    "numpy",
+    "overpy>=0.7",
+    "pyvista>=0.44.1",
+    "rasterio>=1.4.3",
+    "shapely>=2.0.7",
+    "tqdm>=4.67.1",
+    "wget>=3.2",
+]

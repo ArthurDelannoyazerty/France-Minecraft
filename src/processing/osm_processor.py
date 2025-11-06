@@ -1,76 +1,21 @@
-import overpy
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import pyproj
-from shapely.ops import transform as shapely_transform
-import pandas as pd
 import geopandas as gpd
-from shapely.geometry import LineString, Polygon
-import rasterio
-from rasterio.features import rasterize
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-import rasterio.transform
+import matplotlib.pyplot as plt
 import numpy as np
+import overpy
+import pandas as pd
+import pyproj
+import rasterio
+import rasterio.transform
+from rasterio.features import rasterize
+from shapely.geometry import LineString, Polygon
+from shapely.ops import transform as shapely_transform
 
-
-# --- Configuration Constants ---
-TARGET_CRS = "EPSG:2154"  # Lambert-93, a projected CRS in meters
-RASTER_RESOLUTION_METERS = 1.0  # 1 meter resolution
-
-
-# Define a mapping from specific tags to integer values
-# Higher values will be drawn on top (last in rasterize, brighter in colormap)
-# Values start from 1, as 0 is reserved for background/unclassified
-FEATURE_VALUE_MAP = {
-    "natural": {"sand": 1, "glacier": 2, "bare_rock": 3, "rock": 4, "scrub": 5,
-                "heath": 6, "wood": 7, "grassland": 8, "wetland": 9, "shingle": 10},
-    "landuse": {"forest": 11, "farmland": 12, "meadow": 13, "grass": 14, "quarry": 15,
-                "residential": 16, "industrial": 17, "recreation_ground": 18},
-    "highway": {"motorway": 31, "trunk": 32, "primary": 33, "secondary": 34, "tertiary": 35,
-                "unclassified": 36, "residential": 37, "service": 38, "living_street": 39,
-                "pedestrian": 40, "footway": 41, "cycleway": 42, "path": 43,
-                "track": 44, "steps": 45, "bridleway": 46, "raceway": 47,
-                "bus_guideway": 48, "corridor": 49, "elevator": 50, "escalator": 51,
-                "platform": 52, "proposed": 53, "construction": 54},
-    "surface": {"dirt": 21, "gravel": 22, "sand": 23, "grass": 24, "mud": 25,
-                "paved": 26, "asphalt": 27}
-}
-
-
-# Typical real-world widths in meters for different highway types
-ROAD_WIDTH_MAP = {
-    "motorway": 3.5 * 2 + 3.0 * 2,        # 2×3,5 m voies + 2×3 m BAU ≈ 13 m emprise minimal
-    "trunk": 3.5 * 2 + 1.5 * 2,          # 2×3,5 m + accotements ≈ 10 m
-    "primary": 3.5 * 2 + 1.5 * 2,        # voie principal similaire au "trunk"
-    "secondary": 3.25 * 2 + 1.0 * 2,     # voies en zone urbaine ou routes tampons ≈ 8,5 m
-    "tertiary": 3.0 * 2 + 0.75 * 2,      # petites routes rurales ≈ 7,5 m
-    "unclassified": 3.0 * 2,            # 2 voies sans accotement ≈ 6 m
-    "residential": 3.0 * 2,             # voiries urbaines ≈ 6 m
-    "service": 3.0,                      # accès ponctuels ≈ 3 m
-    "living_street": 3.0,                # zones 20 km/h ≈ 3 m
-    "pedestrian": 1.0,                   # voiries partagées
-    "footway": 1.0,                      # trottoirs ou chemins piétons ≈ 2 m
-    "cycleway": 2.5,                     # piste unidirectionnelle ≈ 2 à 2,5 m
-    "path": 3.0,                         # chemin rural ≈ 3 m
-    "track": 3.0,                        # voies agricoles ≈ 3 m
-    "steps": 1.5,                        # escaliers ≈ 1,5 m
-    "bridleway": 2.5,                    # voies équestres ≈ 2–3 m
-    "raceway": 12.0,                     # voie sportive ou circuit ≈ 10–15 m
-    "bus_guideway": 3.25,                # voie bus ≈ 3–3,5 m
-    "corridor": 3.0,                     # couloirs partagés ≈ 3 m
-    "elevator": 2.0,                     # ascenseurs extérieurs ≈ 2 m
-    "escalator": 2.0,                    # escalators ≈ 2 m
-    "platform": 5.0,                     # quai de gare ≈ 5 m
-    "proposed": 3.0,                     # estimation parcellaire ≈ 3 m
-    "construction": 3.0,                 # chantier temporaire ≈ 3 m
-}
-
-
-# Define a priority for tag types (highways on top, then surface, etc.)
-TAG_TYPE_PRIORITY = ["highway", "surface", "landuse", "natural"]
+from src import config
 
 
 def build_overpass_query(polygon: Polygon) -> str:
@@ -120,7 +65,7 @@ def process_overpass_result(result: overpy.Result) -> gpd.GeoDataFrame:
     for way in result.ways:
         tags = way.tags
         # Only include ways that have at least one of our target tag types
-        if any(k in tags for k in TAG_TYPE_PRIORITY):
+        if any(k in tags for k in config.OSM_TAG_TYPE_PRIORITY):
             nodes = way.nodes
             if len(nodes) < 2:
                 continue
@@ -143,29 +88,24 @@ def process_overpass_result(result: overpy.Result) -> gpd.GeoDataFrame:
 
 
 def assign_feature_values(
-    gdf: gpd.GeoDataFrame, feature_map: Dict[str, Dict[str, int]], priority: List[str]
+    gdf: gpd.GeoDataFrame, feature_map: dict, priority: list
 ) -> gpd.GeoDataFrame:
     """
-    Assigns a numerical value to each feature based on its tags and a defined priority.
-    Also assigns a 'buffer_distance' for highway types.
+    Assigns a numerical value and buffer distance based on configuration.
     """
-
-    def _get_value_and_buffer_distance(row: Dict[str, Any]) -> Tuple[int, float]:
+    def _get_value_and_buffer_distance(row: dict) -> tuple[int, float]:
         value = 0
-        buffer_dist = 0.0 # Default no buffer
-        for tag_type in priority: # Iterate through tag types based on priority
-            if tag_type in row and row[tag_type] in feature_map.get(tag_type, {}): # Check if tag exists in row and in the feature_map
+        buffer_dist = 0.0
+        for tag_type in priority:
+            if tag_type in row and row[tag_type] in feature_map.get(tag_type, {}):
                 value = feature_map[tag_type][row[tag_type]]
-                # If it's a highway, get its width and calculate buffer distance (radius)
-                if tag_type == "highway" and row[tag_type] in ROAD_WIDTH_MAP:
-                    buffer_dist = ROAD_WIDTH_MAP[row[tag_type]] / 2.0
-                break # Found the highest priority tag, stop searching
-
+                if tag_type == "highway" and row[tag_type] in config.OSM_ROAD_WIDTH_MAP:
+                    # Use the road width map from the config file
+                    buffer_dist = config.OSM_ROAD_WIDTH_MAP[row[tag_type]] / 2.0
+                break
         return value, buffer_dist
 
-    # Apply the function to get both value and buffer_distance
     gdf[['value', 'buffer_distance']] = gdf.apply(lambda row: pd.Series(_get_value_and_buffer_distance(row)), axis=1)
-    # Sort by value to ensure correct z-ordering during rasterization (lower values first)
     return gdf.sort_values(by='value', ascending=True)
 
 
@@ -273,7 +213,7 @@ def get_road_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple
             If a road type is not found, its list of coordinates will be empty.
     """
     # 1. Reproject polygon to TARGET_CRS to get its bounds and origin in meters
-    transformer = pyproj.Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True).transform
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", config.TARGET_CRS, always_xy=True).transform
     polygon_proj = shapely_transform(transformer, polygon_wgs84)
     minx, miny, _, _ = polygon_proj.bounds
 
@@ -282,10 +222,15 @@ def get_road_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple
     overpass_result = query_overpass(query)
     gdf = process_overpass_result(overpass_result)
     if gdf.empty:
-        return {road_type: [] for road_type in ROAD_WIDTH_MAP.keys()}
+        return {road_type: [] for road_type in config.OSM_ROAD_WIDTH_MAP.keys()}
 
     # 3. Assign feature values and buffer distances
-    gdf_with_values = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
+    gdf_with_values = assign_feature_values(gdf, config.OSM_FEATURE_VALUE_MAP, config.OSM_TAG_TYPE_PRIORITY)
+
+    if 'highway' not in gdf_with_values.columns:
+        # If no highways were found in the Overpass query for this tile, return the default empty dictionary for all road types.
+        print("No 'highway' features found in this tile.")
+        return {road_type: [] for road_type in config.OSM_ROAD_WIDTH_MAP.keys()}
 
     # 4. Filter for roads
     roads_gdf = gdf_with_values[gdf_with_values['highway'].notna()].copy()
@@ -293,8 +238,8 @@ def get_road_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple
     # 5. Rasterize roads by type using the 'highway' column
     road_rasters, transform = rasterize_geometries(
         gdf=roads_gdf,
-        resolution_meters=RASTER_RESOLUTION_METERS,
-        target_crs=TARGET_CRS,
+        resolution_meters=config.RASTER_RESOLUTION_METERS,
+        target_crs=config.TARGET_CRS,
         clip_polygon_proj=polygon_proj,
         type_column='highway'
     )
@@ -315,7 +260,7 @@ def get_road_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tuple
         road_coords_by_type[road_type] = relative_coords
         
     # Ensure the final dictionary contains all possible road types
-    final_coords = {road_type: [] for road_type in ROAD_WIDTH_MAP.keys()}
+    final_coords = {road_type: [] for road_type in config.OSM_ROAD_WIDTH_MAP.keys()}
     final_coords.update(road_coords_by_type)
     
     return final_coords
@@ -335,14 +280,14 @@ def get_terrain_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tu
             If a terrain type is not found, its list of coordinates will be empty.
     """
     # 1. Reproject polygon to TARGET_CRS to get its bounds and origin in meters
-    transformer = pyproj.Transformer.from_crs("EPSG:4326", TARGET_CRS, always_xy=True).transform
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", config.TARGET_CRS, always_xy=True).transform
     polygon_proj = shapely_transform(transformer, polygon_wgs84)
     minx, miny, _, _ = polygon_proj.bounds
     
     # Initialize the result dictionary with all possible terrain types
     all_terrain_types = {}
     for tag_type in ["natural", "landuse", "surface"]:
-        for terrain_type in FEATURE_VALUE_MAP.get(tag_type, {}).keys():
+        for terrain_type in config.OSM_FEATURE_VALUE_MAP.get(tag_type, {}).keys():
             all_terrain_types[terrain_type] = []
 
     # 2. Query Overpass and process result
@@ -353,7 +298,7 @@ def get_terrain_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tu
         return all_terrain_types
 
     # 3. Assign feature values
-    gdf_with_values = assign_feature_values(gdf, FEATURE_VALUE_MAP, TAG_TYPE_PRIORITY)
+    gdf_with_values = assign_feature_values(gdf, config.OSM_FEATURE_VALUE_MAP, config.OSM_TAG_TYPE_PRIORITY)
 
     # 4. Filter for terrain and assign a 'terrain_type' string for grouping
     terrain_gdf = gdf_with_values[gdf_with_values['highway'].isna()].copy()
@@ -361,7 +306,7 @@ def get_terrain_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tu
     def _get_terrain_type(row):
         # Find the highest priority terrain tag based on the defined order
         for tag_type in ["surface", "landuse", "natural"]:
-            if tag_type in row and pd.notna(row[tag_type]) and row[tag_type] in FEATURE_VALUE_MAP.get(tag_type, {}):
+            if tag_type in row and pd.notna(row[tag_type]) and row[tag_type] in config.OSM_FEATURE_VALUE_MAP.get(tag_type, {}):
                 return row[tag_type]
         return None
         
@@ -371,8 +316,8 @@ def get_terrain_coordinates_by_type(polygon_wgs84: Polygon) -> Dict[str, List[Tu
     # 5. Rasterize terrain by its determined type
     terrain_rasters, transform = rasterize_geometries(
         gdf=terrain_gdf,
-        resolution_meters=RASTER_RESOLUTION_METERS,
-        target_crs=TARGET_CRS,
+        resolution_meters=config.RASTER_RESOLUTION_METERS,
+        target_crs=config.TARGET_CRS,
         clip_polygon_proj=polygon_proj,
         type_column='terrain_type'
     )
